@@ -1,0 +1,16 @@
+[package]
+name = "modul_render"
+version = "0.0.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Currently just reserved, planning to create a simple game/app engine based on bevy_ecs"
+
+[dependencies]
+modul_core = {path = "../modul_core"}
+modul_asset = {path = "../modul_asset"}
+modul_util = {path = "../modul_util"}
+bevy_app = "0.15"
+bevy_ecs = "0.15"
+wgpu = "24.0"
+winit = "0.30"
+log = "0.4"

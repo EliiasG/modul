@@ -1,0 +1,31 @@
+workspace = {members = ["crates/*"]}
+[package]
+name = "modul"
+version = "0.0.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Currently just reserved, planning to create a simple game/app engine based on bevy_ecs"
+
+[dependencies]
+modul_core = { path = "crates/modul_core" }
+modul_render = { path = "crates/modul_render" }
+modul_asset = { path = "crates/modul_asset" }
+modul_texture = { path = "crates/modul_texture" }
+modul_util = { path = "crates/modul_util" }
+
+[dev-dependencies]
+winit = "0.30"
+wgpu = "24.0"
+bevy_ecs = "0.15"
+
+[[example]]
+name = "window"
+path = "examples/window.rs"
+
+[[example]]
+name = "colors"
+path = "examples/colors.rs"
+
+[[example]]
+name = "multi_window"
+path = "examples/multi_window.rs"

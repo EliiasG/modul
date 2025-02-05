@@ -1,0 +1,12 @@
+[package]
+name = "modul_asset"
+version = "0.0.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Currently just reserved, planning to create a simple game/app engine based on bevy_ecs"
+
+[dependencies]
+bevy_app = "0.15"
+bevy_ecs = "0.15"
+modul_core = {path = "../modul_core"}
+modul_util = {path = "../modul_util"}
