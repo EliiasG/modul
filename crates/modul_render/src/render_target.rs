@@ -799,7 +799,7 @@ impl SurfaceRenderTarget {
         };
         if color_changed || self.resized {
             surface.configure(&device, &surface_cfg);
-            if multisampled_changed {
+            if multisampled_changed || self.resized {
                 self.multisampled_texture = cfg.color_config.multisample_config.as_ref().map(|m| {
                     let mut desc = texture_descriptor(self.size.0, self.size.1);
                     desc.format = surface_cfg.format;
@@ -1005,7 +1005,6 @@ fn texture_descriptor(width: u32, height: u32) -> TextureDescriptor<'static> {
 
 fn with_view(t: Texture) -> (Texture, TextureView) {
     // FIXME customization?
-
     let v = t.create_view(&TextureViewDescriptor::default());
     (t, v)
 }

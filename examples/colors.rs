@@ -29,7 +29,7 @@ fn init_sequence(
     mut commands: Commands,
 ) {
     let render_target = RenderTargetSource::Surface(surface_query.single());
-    let mut builder =SequenceBuilder::new();
+    let mut builder = SequenceBuilder::new();
     builder
         .add(ClearNext { render_target })
         .add(EmptyPass { render_target });

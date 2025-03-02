@@ -6,6 +6,7 @@ use std::ops::Range;
 use winit::event::{Event, WindowEvent};
 
 pub type HashMap<K, V> = hashbrown::HashMap<K, V>;
+
 pub type HashSet<T> = hashbrown::HashSet<T>;
 
 /// Plugin that will make the app close when the main window is requested to close

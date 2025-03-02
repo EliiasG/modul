@@ -15,18 +15,19 @@ use std::{
 };
 use wgpu::{
     Device, Extent3d, Origin3d, Queue, TexelCopyBufferLayout, TexelCopyTextureInfo, Texture,
-    TextureAspect, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,
+    TextureAspect, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, TextureView,
+    TextureViewDescriptor,
 };
 
 /// Systems that load textures during [PreDraw], anything that runs in [PreDraw] and needs textures should run after this
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TextureLoadSet;
 
-struct TextureLoadPlugin;
+pub struct TextureLoadPlugin;
 
 impl Plugin for TextureLoadPlugin {
     fn build(&self, app: &mut App) {
-        app.init_assets::<Texture>();
+        app.init_assets::<ViewTexture>();
         app.insert_resource(TextureQueue { queue: Vec::new() });
         app.add_systems(PreDraw, load_textures.in_set(TextureLoadSet));
     }
@@ -190,6 +191,13 @@ impl From<Image> for MipMapImage {
     }
 }
 
+/// A texture with a view used for reading in shaders.  
+/// If you want to draw to a texture consider a [RenderTarget](modul_render::RenderTarget)
+pub struct ViewTexture {
+    pub texture: Texture,
+    pub view: TextureView,
+}
+
 pub enum LayeredTextureError {
     /// Returned if a layered image was attempted, but there are no layers
     NoLayers,
@@ -207,7 +215,7 @@ impl TextureQueue {
     /// inits a texture on the given asset, discards the current texture if it already exists
     pub fn init(
         &mut self,
-        asset_id: AssetId<Texture>,
+        asset_id: AssetId<ViewTexture>,
         size: (u32, u32),
         usage: TextureUsages,
         mip_count: u32,
@@ -227,7 +235,7 @@ impl TextureQueue {
     pub fn write(
         &mut self,
         image: impl Into<MipMapImage>,
-        asset_id: AssetId<Texture>,
+        asset_id: AssetId<ViewTexture>,
         origin: Origin3d,
     ) {
         self.queue
@@ -242,12 +250,12 @@ impl TextureQueue {
 #[derive(SystemParam)]
 pub struct TextureLoader<'w> {
     texture_queue: ResMut<'w, TextureQueue>,
-    texture_assets: ResMut<'w, Assets<Texture>>,
+    texture_assets: ResMut<'w, Assets<ViewTexture>>,
 }
 
 impl TextureLoader<'_> {
     /// loads a texture
-    pub fn load_texture(&mut self, image: impl Into<MipMapImage>) -> AssetId<Texture> {
+    pub fn load_texture(&mut self, image: impl Into<MipMapImage>) -> AssetId<ViewTexture> {
         let image = image.into();
         let asset_id = self.texture_assets.add_empty();
         self.texture_queue.init(
@@ -265,7 +273,7 @@ impl TextureLoader<'_> {
     pub fn load_layered_texture(
         &mut self,
         layers: Vec<MipMapImage>,
-    ) -> Result<AssetId<Texture>, LayeredTextureError> {
+    ) -> Result<AssetId<ViewTexture>, LayeredTextureError> {
         // checking to not allocate asset in case of error
         if let Some(err) = validate_layers(&layers) {
             return Err(err);
@@ -312,12 +320,12 @@ enum TextureOperation {
 
 struct TextureWriteInfo {
     image: MipMapImage,
-    asset_id: AssetId<Texture>,
+    asset_id: AssetId<ViewTexture>,
     origin: Origin3d,
 }
 
 struct TextureInitInfo {
-    asset_id: AssetId<Texture>,
+    asset_id: AssetId<ViewTexture>,
     size: (u32, u32),
     usage: TextureUsages,
     mip_count: u32,
@@ -326,7 +334,7 @@ struct TextureInitInfo {
 
 fn load_textures(
     mut texture_queue: ResMut<TextureQueue>,
-    mut texture_assets: ResMut<Assets<Texture>>,
+    mut texture_assets: ResMut<Assets<ViewTexture>>,
     device: Res<DeviceRes>,
     queue: Res<QueueRes>,
 ) {
@@ -340,15 +348,15 @@ fn load_textures(
     }
 }
 
-fn write_texture(info: TextureWriteInfo, texture_assets: &Assets<Texture>, queue: &Queue) {
+fn write_texture(info: TextureWriteInfo, texture_assets: &Assets<ViewTexture>, queue: &Queue) {
     info.image.write_to_texture(
         queue,
         info.origin,
-        texture_assets.get(info.asset_id).unwrap(),
+        &texture_assets.get(info.asset_id).unwrap().texture,
     );
 }
 
-fn init_texture(info: TextureInitInfo, texture_assets: &mut Assets<Texture>, device: &Device) {
+fn init_texture(info: TextureInitInfo, texture_assets: &mut Assets<ViewTexture>, device: &Device) {
     let texture = device.create_texture(&TextureDescriptor {
         label: None,
         size: Extent3d {
@@ -363,5 +371,11 @@ fn init_texture(info: TextureInitInfo, texture_assets: &mut Assets<Texture>, dev
         usage: info.usage,
         view_formats: &[],
     });
-    texture_assets.replace(info.asset_id, texture);
+    texture_assets.replace(
+        info.asset_id,
+        ViewTexture {
+            view: texture.create_view(&TextureViewDescriptor::default()),
+            texture,
+        },
+    );
 }

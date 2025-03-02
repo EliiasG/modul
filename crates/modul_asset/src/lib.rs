@@ -77,6 +77,9 @@ impl<T: Send + Sync + 'static> Assets<T> {
     }
 }
 
+/// Useful for asset "metadata" a bit like [EntityHashMaps](bevy_ecs::entity::EntityHashMap)
+pub type AssetMap<K, V> = HashMap<AssetId<K>, V>;
+
 pub trait AssetWorldExt {
     /// Adds an empty asset
     fn add_empty_asset<T: Send + Sync + 'static>(&mut self) -> AssetId<T>;
@@ -138,7 +141,7 @@ impl AssetWorldExt for World {
             None => return,
         };
         f(self, &mut assset);
-        self.add_asset(assset);
+        self.resource_mut::<Assets<T>>().replace(asset_id, assset);
     }
 
     fn replace_asset<T: Send + Sync + 'static>(

@@ -70,7 +70,7 @@ pub trait OperationBuilder: Send + Sync + 'static {
     fn reading(&self) -> Vec<RenderTargetSource>;
     /// used by the sequence to determine when to resolve rendertargets
     fn writing(&self) -> Vec<RenderTargetSource>;
-    fn finish(self, device: &Device) -> impl Operation + 'static;
+    fn finish(self, world: &World, device: &Device) -> impl Operation + 'static;
 }
 
 pub trait Operation: Send + Sync {
@@ -98,7 +98,7 @@ impl Sequence {
                 for writing in builder.writing() {
                     needs_resolving.insert(writing);
                 }
-                operations.push(SequenceOperation::Run(builder.finish(device)));
+                operations.push(SequenceOperation::Run(builder.finish(&world, device)));
             }
             for resolve in needs_resolving {
                 operations.push(SequenceOperation::ResolveNext(resolve));
@@ -168,7 +168,7 @@ pub struct RunningSequenceQueue(pub SequenceQueue);
 trait DynOperationBuilder: Send + Sync + 'static {
     fn reading(&self) -> Vec<RenderTargetSource>;
     fn writing(&self) -> Vec<RenderTargetSource>;
-    fn finish(&mut self, device: &Device) -> Box<dyn Operation>;
+    fn finish(&mut self, world: &World, device: &Device) -> Box<dyn Operation>;
 }
 
 struct DynOperationBuilderImpl<T: OperationBuilder>(Option<Box<T>>);
@@ -182,8 +182,8 @@ impl<T: OperationBuilder> DynOperationBuilder for DynOperationBuilderImpl<T> {
         self.0.as_ref().unwrap().writing()
     }
 
-    fn finish(&mut self, device: &Device) -> Box<dyn Operation> {
-        Box::new(self.0.take().unwrap().finish(device))
+    fn finish(&mut self, world: &World, device: &Device) -> Box<dyn Operation> {
+        Box::new(self.0.take().unwrap().finish(world, device))
     }
 }
 enum InnerSequence {

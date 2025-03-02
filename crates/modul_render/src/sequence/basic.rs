@@ -22,7 +22,7 @@ impl OperationBuilder for ClearNext {
         Vec::new()
     }
 
-    fn finish(self, _device: &wgpu::Device) -> impl Operation + 'static {
+    fn finish(self, _world: &World, _device: &wgpu::Device) -> impl Operation + 'static {
         self
     }
 }
@@ -46,7 +46,7 @@ impl OperationBuilder for EmptyPass {
         vec![self.render_target]
     }
 
-    fn finish(self, _device: &wgpu::Device) -> impl Operation + 'static {
+    fn finish(self, _world: &World, _device: &wgpu::Device) -> impl Operation + 'static {
         self
     }
 }

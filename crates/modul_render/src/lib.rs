@@ -1,5 +1,7 @@
 mod render_target;
 mod sequence;
+mod pipeline_manager;
+mod bind_group_composition;
 
 use bevy_app::{App, Plugin};
 use bevy_ecs::prelude::*;
@@ -9,11 +11,13 @@ use modul_core::{
     AdapterRes, DeviceRes, EventBuffer, ImportantWindow, Redraw, ShouldExit, SurfaceFormat,
     UpdatingWindow, WindowComponent, WindowMap,
 };
-use wgpu::SurfaceError;
+use wgpu::{PipelineLayout, ShaderModule, SurfaceError};
 use winit::event::{Event, WindowEvent};
 
 pub use render_target::*;
+pub use pipeline_manager::*;
 pub use sequence::*;
+pub use bind_group_composition::*;
 
 /// Runs before [Synchronize] useful to pause processes that should be rendered
 #[derive(ScheduleLabel, Clone, Hash, PartialEq, Eq, Debug)]
@@ -62,6 +66,9 @@ impl Plugin for RenderPlugin {
         app.init_schedule(Draw);
         app.init_schedule(PostDraw);
         app.init_assets::<Sequence>();
+        app.init_assets::<ShaderModule>();
+        app.init_assets::<PipelineLayout>();
+        app.init_assets::<RenderPipelineManager>();
 
         app.add_systems(
             Redraw,
@@ -94,6 +101,11 @@ impl Plugin for RenderPlugin {
 /// If added before [RenderSystemSet], [Synchronize] and [Draw] will run
 #[derive(Resource)]
 pub struct ShouldDraw;
+
+/// Sets the initial [SurfaceRenderTargetConfig] of a window entity, this will be removed when the render target is created
+#[derive(Component)]
+pub struct InitialSurfaceConfig(pub SurfaceRenderTargetConfig);
+
 fn handle_events(
     mut commands: Commands,
     device: Res<DeviceRes>,
@@ -105,7 +117,8 @@ fn handle_events(
         Has<ImportantWindow>,
     )>,
 ) {
-    for e in events.events() {
+    
+    for e in events.events().iter() {
         let Event::WindowEvent { window_id, event } = e else {
             continue;
         };
@@ -139,14 +152,17 @@ fn create_surface_targets(
     mut commands: Commands,
     adapter: Res<AdapterRes>,
     format: Res<SurfaceFormat>,
-    window_query: Query<(Entity, &WindowComponent), Without<SurfaceRenderTarget>>,
+    window_query: Query<
+        (Entity, &WindowComponent, Option<&InitialSurfaceConfig>),
+        Without<SurfaceRenderTarget>,
+    >,
 ) {
-    for (e, WindowComponent { window, surface }) in window_query.iter() {
-        let mut rt = SurfaceRenderTarget::new(SurfaceRenderTargetConfig::default());
+    for (e, WindowComponent { window, surface }, cfg) in window_query.iter() {
+        let mut rt = SurfaceRenderTarget::new(cfg.map(|r| r.0.clone()).unwrap_or_default());
         rt.init(format.0, surface.get_capabilities(&adapter.0));
         let s = window.inner_size();
         rt.set_size((s.width, s.height));
-        commands.entity(e).insert(rt);
+        commands.entity(e).insert(rt).remove::<InitialSurfaceConfig>();
     }
 }
 
