@@ -2,6 +2,7 @@ use bevy_ecs::prelude::*;
 use modul_core::PreInit;
 use std::hash::Hash;
 use std::marker::PhantomData;
+use std::sync::Arc;
 use bevy_app::{App, Plugin};
 use modul_util::HashMap;
 
