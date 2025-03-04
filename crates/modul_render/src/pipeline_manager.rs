@@ -1,17 +1,32 @@
-use crate::{DynBindGroupLayoutProvider, PipelineLayoutProvider, RenderTarget, RenderTargetSource};
+use crate::RenderTargetSource;
 use bevy_ecs::world::World;
-use modul_asset::{AssetId, Assets};
 use modul_core::DeviceRes;
 use modul_util::HashMap;
-use std::ops::Deref;
-use naga_oil::compose::NagaModuleDescriptor;
-use wgpu::{BlendState, BufferAddress, ColorTargetState, ColorWrites, CompareFunction, DepthBiasState, DepthStencilState, Device, FragmentState, MultisampleState, PipelineLayout, PrimitiveState, RenderPipeline, RenderPipelineDescriptor, ShaderModule, StencilState, TextureFormat, VertexAttribute, VertexBufferLayout, VertexState, VertexStepMode};
+use wgpu::{
+    BlendState, BufferAddress, ColorTargetState, ColorWrites, CompareFunction, DepthBiasState,
+    DepthStencilState, FragmentState, MultisampleState, PipelineLayout, PrimitiveState,
+    RenderPipeline, RenderPipelineDescriptor, ShaderModule, StencilState, TextureFormat,
+    VertexAttribute, VertexBufferLayout, VertexState, VertexStepMode,
+};
+
+/// Provides [BindGroupLayout](wgpu::BindGroupLayout) and [ShaderModules](ShaderModule) for a [RenderPipeline](RenderPipeline)
+pub trait RenderPipelineResourceProvider {
+    /// Should always be called before getting resources.  
+    fn update(&self, world: &mut World);
+
+    // no mut self, because it gets mut world and should just be a ref
+    fn get_pipeline_layout<'a>(&self, world: &'a World) -> &'a PipelineLayout;
+
+    fn get_vertex_shader_module<'a>(&self, world: &'a World) -> &'a ShaderModule;
+
+    fn get_fragment_shader_module<'a>(&self, world: &'a World) -> &'a ShaderModule;
+}
 
 /// A stripped version of [RenderPipelineDescriptor] that removes multisample and format information.
 /// This is useful to define pipelines without knowing anything about the textures.
 pub struct GenericRenderPipelineDescriptor {
+    pub resource_provider: Box<dyn RenderPipelineResourceProvider + Send + Sync + 'static>,
     pub label: Option<String>,
-    pub layout: AssetId<PipelineLayoutProvider>,
     pub vertex_state: GenericVertexState,
     pub primitive: PrimitiveState,
     pub depth_stencil: Option<GenericDepthStencilState>,
@@ -21,7 +36,6 @@ pub struct GenericRenderPipelineDescriptor {
 
 /// Used with [GenericRenderPipelineDescriptor]
 pub struct GenericVertexState {
-    pub module: AssetId<>,
     pub entry_point: String,
     pub buffers: Vec<GenericVertexBufferLayout>,
 }
@@ -49,8 +63,6 @@ pub struct GenericMultisampleState {
 
 /// Used with [GenericRenderPipelineDescriptor]
 pub struct GenericFragmentState {
-    // TODO naga_oil
-    pub module: AssetId<ShaderModule>,
     pub entry_point: String,
     /// Blend state of the possible target
     pub target_blend: Option<BlendState>,
@@ -96,13 +108,7 @@ impl RenderPipelineManager {
 
     /// Gets a pipeline from the internal cache, or creates and stores one given the parameters.  
     /// The returned value can be ignored if you just want to init the pipeline.  
-    pub fn get(
-        &mut self,
-        params: &PipelineParameters,
-        device: &Device,
-        layouts: &Assets<PipelineLayout>,
-        shaders: &Assets<ShaderModule>,
-    ) -> &RenderPipeline {
+    pub fn get(&mut self, world: &mut World, params: &PipelineParameters) -> &RenderPipeline {
         if params.color_format.is_none() && params.depth_stencil_format.is_none() {
             panic!("color_format and depth_stencil_format must not both be none");
         }
@@ -113,22 +119,25 @@ impl RenderPipelineManager {
             panic!("no depth_stencil format on pipeline that only supports depth_stencil");
         }
 
+
         self.instances.entry(params.clone()).or_insert_with(|| {
-            let module = shaders
-                .get(self.desc.vertex_state.module)
-                .expect("shader does not exist");
+            self.desc.resource_provider.update(world);
+
+            let device = &world.resource::<DeviceRes>().0;
+
+            let vs_module = self.desc.resource_provider.get_vertex_shader_module(world);
+            let fs_module = self
+                .desc
+                .resource_provider
+                .get_fragment_shader_module(world);
 
             let mut targets = Vec::new();
 
             let desc = RenderPipelineDescriptor {
                 label: self.desc.label.as_ref().map(String::as_str),
-                layout: Some(
-                    layouts
-                        .get(self.desc.layout)
-                        .expect("layout does not exist"),
-                ),
+                layout: Some(self.desc.resource_provider.get_pipeline_layout(world)),
                 vertex: VertexState {
-                    module,
+                    module: vs_module,
                     entry_point: Some(self.desc.vertex_state.entry_point.as_str()),
                     compilation_options: Default::default(),
                     buffers: &self
@@ -161,23 +170,23 @@ impl RenderPipelineManager {
                     mask: self.desc.multisample.mask,
                     alpha_to_coverage_enabled: self.desc.multisample.alpha_to_coverage_enabled,
                 },
-                /*
-                fragment: params.color_format.and_then(|format| {
-                    self.desc.fragment.as_ref().map(|frag|
-                }),*/
-                fragment: if let (Some(format), Some(frag)) = (params.color_format, self.desc.fragment.as_ref()) {
-                    targets.push(Some(ColorTargetState{
+                fragment: if let (Some(format), Some(frag)) =
+                    (params.color_format, self.desc.fragment.as_ref())
+                {
+                    targets.push(Some(ColorTargetState {
                         format,
                         blend: frag.target_blend,
                         write_mask: frag.target_color_writes,
                     }));
                     Some(FragmentState {
-                        module,
+                        module: fs_module,
                         entry_point: Some(frag.entry_point.as_str()),
                         compilation_options: Default::default(),
                         targets: &targets,
                     })
-                } else {None},
+                } else {
+                    None
+                },
                 multiview: None,
                 cache: None,
             };
@@ -190,12 +199,9 @@ impl RenderPipelineManager {
     pub fn get_compatible(
         &mut self,
         render_target: RenderTargetSource,
-        world: &World,
+        world: &mut World,
     ) -> Option<&RenderPipeline> {
         let render_target = render_target.get(world)?;
-        let device = &world.resource::<DeviceRes>().0;
-        let layouts = world.resource();
-        let shaders = world.resource();
         let color_format = render_target.texture().map(|t| t.format());
         let depth_stencil_format = render_target.depth_stencil().map(|t| t.format());
         if color_format.is_none() && depth_stencil_format.is_none() {
@@ -208,14 +214,12 @@ impl RenderPipelineManager {
             return None;
         }
         Some(self.get(
+            world,
             &PipelineParameters {
                 color_format,
                 depth_stencil_format,
                 sample_count: render_target.sample_count(),
             },
-            device,
-            layouts,
-            shaders,
         ))
     }
 }
