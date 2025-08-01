@@ -1,14 +1,14 @@
+use bevy_app::App;
 use bevy_ecs::prelude::*;
-use modul_core::PreInit;
+use modul_util::HashMap;
 use std::hash::Hash;
 use std::marker::PhantomData;
-use std::sync::Arc;
-use bevy_app::{App, Plugin};
-use modul_util::HashMap;
+use bevy_ecs::entity::EntityHasher;
 
 #[derive(Resource)]
 pub struct Assets<T> {
     next: usize,
+    // FIXME maybe use RwLock per asset instead of map of assets...
     assets: HashMap<usize, T>,
 }
 
@@ -57,6 +57,10 @@ impl<T: Send + Sync + 'static> Assets<T> {
         id
     }
 
+    pub fn contains(&self, id: &AssetId<T>) -> bool {
+        self.assets.contains_key(&id.0)
+    }
+
     /// Immutably gets an asset from an id
     pub fn get(&self, asset_id: AssetId<T>) -> Option<&T> {
         self.assets.get(&asset_id.0)
@@ -86,8 +90,21 @@ pub trait AssetWorldExt {
     fn add_empty_asset<T: Send + Sync + 'static>(&mut self) -> AssetId<T>;
     /// Adds an asset and returns its id
     fn add_asset<T: Send + Sync + 'static>(&mut self, asset: T) -> AssetId<T>;
+    /// Checks if a given asset exists
+    fn has_asset<T: Send + Sync + 'static>(&self, asset: AssetId<T>) -> bool;
+
     /// Gets an asset from an id
     fn get_asset<T: Send + Sync + 'static>(&self, asset_id: AssetId<T>) -> Option<&T>;
+
+    /// Gets an asset from an id
+    fn get_asset_mut<T: Send + Sync + 'static>(&mut self, asset_id: AssetId<T>) -> Option<Mut<T>>;
+
+    /// gets and unwraps the given asset id
+    fn asset<T: Send + Sync + 'static>(&self, asset_id: AssetId<T>) -> &T;
+
+    /// get and unwraps the given asset id mutably
+    fn asset_mut<T: Send + Sync + 'static>(&mut self, asset_id: AssetId<T>) -> Mut<T>;
+
     /// Gets an asset from an id and runs a function on it, if the asset is not found the function is not run
     fn with_asset<T: Send + Sync + 'static, F: FnOnce(&mut T)>(
         &mut self,
@@ -111,18 +128,49 @@ pub trait AssetWorldExt {
 }
 
 impl AssetWorldExt for World {
+    #[inline]
     fn add_empty_asset<T: Send + Sync + 'static>(&mut self) -> AssetId<T> {
         self.resource_mut::<Assets<T>>().add_empty()
     }
 
+    #[inline]
     fn add_asset<T: Send + Sync + 'static>(&mut self, asset: T) -> AssetId<T> {
         self.resource_mut::<Assets<T>>().add(asset)
     }
 
+    #[inline]
+    fn has_asset<T: Send + Sync + 'static>(&self, asset: AssetId<T>) -> bool {
+        self.resource::<Assets<T>>().contains(&asset)
+    }
+
+    #[inline]
     fn get_asset<T: Send + Sync + 'static>(&self, asset_id: AssetId<T>) -> Option<&T> {
         self.get_resource::<Assets<T>>()?.get(asset_id)
     }
 
+    #[inline]
+    fn get_asset_mut<T: Send + Sync + 'static>(&mut self, asset_id: AssetId<T>) -> Option<Mut<T>> {
+        if self.has_asset(asset_id) {
+            Some(
+                self.resource_mut::<Assets<T>>()
+                    .map_unchanged(|assets| assets.get_mut(asset_id).unwrap()),
+            )
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    fn asset<T: Send + Sync + 'static>(&self, asset_id: AssetId<T>) -> &T {
+        self.get_asset(asset_id).unwrap()
+    }
+
+    #[inline]
+    fn asset_mut<T: Send + Sync + 'static>(&mut self, asset_id: AssetId<T>) -> Mut<T> {
+        self.get_asset_mut(asset_id).unwrap()
+    }
+
+    #[inline]
     fn with_asset<T: Send + Sync + 'static, F: FnOnce(&mut T)>(
         &mut self,
         asset_id: AssetId<T>,
@@ -132,6 +180,7 @@ impl AssetWorldExt for World {
             .map(|mut assets| assets.get_mut(asset_id).map(f));
     }
 
+    #[inline]
     fn asset_scope<T: Send + Sync + 'static, F: FnOnce(&mut Self, &mut T)>(
         &mut self,
         asset_id: AssetId<T>,
@@ -145,6 +194,7 @@ impl AssetWorldExt for World {
         self.resource_mut::<Assets<T>>().replace(asset_id, assset);
     }
 
+    #[inline]
     fn replace_asset<T: Send + Sync + 'static>(
         &mut self,
         asset_id: AssetId<T>,
@@ -154,6 +204,7 @@ impl AssetWorldExt for World {
             .replace(asset_id, asset)
     }
 
+    #[inline]
     fn remove_asset<T: Send + Sync + 'static>(&mut self, asset_id: AssetId<T>) -> Option<T> {
         self.get_resource_mut::<Assets<T>>()?.remove(asset_id)
     }
@@ -164,6 +215,7 @@ pub trait AssetAppExt {
 }
 
 impl AssetAppExt for App {
+    #[inline]
     fn init_assets<T: Send + Sync + 'static>(&mut self) {
         self.world_mut().insert_resource(Assets::<T>::new());
     }

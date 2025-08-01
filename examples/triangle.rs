@@ -1,12 +1,22 @@
 /// Triangle rendering using the low level functions of modul.
-
 use bevy_ecs::prelude::*;
 use modul::asset::{AssetId, AssetWorldExt, Assets};
 use modul::core::{run_app, DefaultGraphicsInitializer, DeviceRes, Init, MainWindow};
-use modul::render::{ClearNext, GenericFragmentState, GenericMultisampleState, GenericRenderPipelineDescriptor, GenericVertexState, InitialSurfaceConfig, Operation, OperationBuilder, RenderPipelineManager, RenderPlugin, RenderTargetColorConfig, RenderTargetMultisampleConfig, RenderTargetSource, RunningSequenceQueue, Sequence, SequenceBuilder, SequenceQueue, SurfaceRenderTargetConfig};
+use modul::render::{
+    ClearNext, GenericFragmentState, GenericMultisampleState, GenericRenderPipelineDescriptor,
+    GenericVertexState, InitialSurfaceConfig, Operation, OperationBuilder, RenderPipelineManager,
+    RenderPlugin, RenderTargetColorConfig, RenderTargetMultisampleConfig, RenderTargetSource,
+    RunningSequenceQueue, Sequence, SequenceBuilder, SequenceQueue, SurfaceRenderTargetConfig,
+};
 use modul::util::ExitPlugin;
-use wgpu::{BlendState, Color, ColorWrites, CommandEncoder, Device, FrontFace, PipelineLayout, PipelineLayoutDescriptor, PolygonMode, PowerPreference, PresentMode, PrimitiveState, PrimitiveTopology, ShaderModule, ShaderModuleDescriptor, ShaderSource, TextureFormat, TextureUsages};
+use modul_render::DirectRenderPipelineResourceProvider;
+use wgpu::{
+    BlendState, Color, ColorWrites, CommandEncoder, Device, FrontFace, PipelineLayout,
+    PipelineLayoutDescriptor, PolygonMode, PowerPreference, PresentMode, PrimitiveState,
+    PrimitiveTopology, ShaderModule, ShaderModuleDescriptor, ShaderSource, TextureUsages,
+};
 use winit::window::WindowAttributes;
+
 
 fn main() {
     run_app(
@@ -63,10 +73,13 @@ fn init_pipeline(
         push_constant_ranges: &[],
     }));
     let desc = GenericRenderPipelineDescriptor {
+        resource_provider: Box::new(DirectRenderPipelineResourceProvider {
+            layout,
+            vertex_shader_module: shader,
+            fragment_shader_module: shader,
+        }),
         label: None,
-        layout,
         vertex_state: GenericVertexState {
-            module: shader,
             entry_point: "vs_main".to_string(),
             buffers: vec![],
         },
@@ -85,7 +98,6 @@ fn init_pipeline(
             alpha_to_coverage_enabled: false,
         },
         fragment: Some(GenericFragmentState {
-            module: shader,
             entry_point: "fs_main".to_string(),
             target_blend: Some(BlendState::REPLACE),
             target_color_writes: ColorWrites::ALL,

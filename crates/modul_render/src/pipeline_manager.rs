@@ -8,6 +8,7 @@ use wgpu::{
     RenderPipeline, RenderPipelineDescriptor, ShaderModule, StencilState, TextureFormat,
     VertexAttribute, VertexBufferLayout, VertexState, VertexStepMode,
 };
+use modul_asset::{AssetId, AssetWorldExt};
 
 /// Provides [BindGroupLayout](wgpu::BindGroupLayout) and [ShaderModules](ShaderModule) for a [RenderPipeline](RenderPipeline)
 pub trait RenderPipelineResourceProvider {
@@ -20,6 +21,28 @@ pub trait RenderPipelineResourceProvider {
     fn get_vertex_shader_module<'a>(&self, world: &'a World) -> &'a ShaderModule;
 
     fn get_fragment_shader_module<'a>(&self, world: &'a World) -> &'a ShaderModule;
+}
+
+pub struct DirectRenderPipelineResourceProvider {
+    pub layout: AssetId<PipelineLayout>,
+    pub vertex_shader_module: AssetId<ShaderModule>,
+    pub fragment_shader_module: AssetId<ShaderModule>,
+}
+
+impl RenderPipelineResourceProvider for DirectRenderPipelineResourceProvider {
+    fn update(&self, world: &mut World) {}
+
+    fn get_pipeline_layout<'a>(&self, world: &'a World) -> &'a PipelineLayout {
+        world.asset(self.layout)
+    }
+
+    fn get_vertex_shader_module<'a>(&self, world: &'a World) -> &'a ShaderModule {
+        world.asset(self.vertex_shader_module)
+    }
+
+    fn get_fragment_shader_module<'a>(&self, world: &'a World) -> &'a ShaderModule {
+        world.asset(self.fragment_shader_module)
+    }
 }
 
 /// A stripped version of [RenderPipelineDescriptor] that removes multisample and format information.
@@ -118,8 +141,7 @@ impl RenderPipelineManager {
         if !self.has_color() && params.depth_stencil_format.is_none() {
             panic!("no depth_stencil format on pipeline that only supports depth_stencil");
         }
-
-
+        
         self.instances.entry(params.clone()).or_insert_with(|| {
             self.desc.resource_provider.update(world);
 
@@ -192,6 +214,12 @@ impl RenderPipelineManager {
             };
             device.create_render_pipeline(&desc)
         })
+    }
+    
+    /// Gets a pipeline if it exists, otherwise will return None.  
+    /// Using [get](Self::get) will create the desired pipeline instead of returning an option.  
+    pub fn try_get(&self, params: &PipelineParameters) -> Option<&RenderPipeline> {
+        self.instances.get(params)
     }
 
     /// Gets the pipeline for a [RenderTarget], see [Self::get] for more details.  

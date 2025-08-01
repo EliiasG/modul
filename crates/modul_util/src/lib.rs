@@ -2,7 +2,7 @@ use bevy_app::{App, Plugin};
 use bevy_ecs::prelude::*;
 pub use hashbrown;
 use modul_core::{EventBuffer, MainWindow, Redraw, ShouldExit, WindowMap};
-use std::ops::Range;
+use std::ops::{Deref, DerefMut, Range};
 use winit::event::{Event, WindowEvent};
 
 pub type HashMap<K, V> = hashbrown::HashMap<K, V>;
@@ -16,9 +16,16 @@ impl Plugin for ExitPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Redraw,
-            |mut commands: Commands, events: Res<EventBuffer>, window_map: Res<WindowMap>, main: Query<Entity, With<MainWindow>>| {
+            |mut commands: Commands,
+             events: Res<EventBuffer>,
+             window_map: Res<WindowMap>,
+             main: Query<Entity, With<MainWindow>>| {
                 for e in events.events() {
-                    if let Event::WindowEvent {window_id, event: WindowEvent::CloseRequested } = e {
+                    if let Event::WindowEvent {
+                        window_id,
+                        event: WindowEvent::CloseRequested,
+                    } = e
+                    {
                         let e = window_map.get(window_id).unwrap();
                         if e == main.single() {
                             commands.insert_resource(ShouldExit);
