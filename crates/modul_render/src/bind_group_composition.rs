@@ -11,9 +11,10 @@ use std::marker::PhantomData;
 use std::num::NonZero;
 use wgpu::naga::Module;
 use wgpu::{
-    BindGroup, BindGroupDescriptor, BindGroupLayoutDescriptor, BindGroupLayoutEntry,
-    BindingResource, BindingType, Device, PipelineLayout, PipelineLayoutDescriptor, ShaderModule,
-    ShaderModuleDescriptor, ShaderRuntimeChecks, ShaderSource, ShaderStages,
+    BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor,
+    BindGroupLayoutEntry, BindingResource, BindingType, Buffer, BufferDescriptor, BufferUsages,
+    Device, PipelineLayout, PipelineLayoutDescriptor, Queue, ShaderModule, ShaderModuleDescriptor,
+    ShaderRuntimeChecks, ShaderSource, ShaderStages,
 };
 
 /// Provides a bind group shaders, for static cases use [ConstBindGroupLayoutProvider]
@@ -54,6 +55,21 @@ pub trait BindGroupProvider {
 
 pub struct SimpleBindGroupProvider {
     bind_group: BindGroup,
+    uniform_buffers: Vec<Buffer>,
+}
+
+impl SimpleBindGroupProvider {
+    pub fn set_uniform<Ty: UniformType>(
+        &self,
+        queue: &Queue,
+        entry: &UniformEntry<Ty>,
+        value: Ty::Resource,
+    ) {
+        let buffer = &self.uniform_buffers[entry.0 as usize];
+        let mut bytes = vec![0u8; entry.1];
+        Ty::set_bytes(value, &mut bytes);
+        queue.write_buffer(buffer, 0, &bytes);
+    }
 }
 
 impl BindGroupProvider for SimpleBindGroupProvider {
@@ -64,21 +80,53 @@ impl BindGroupProvider for SimpleBindGroupProvider {
 
 pub struct SimpleBindGroupLayoutProvider {
     entries: Vec<BindGroupLayoutEntry>,
+    /// (binding index, byte size) for each uniform
+    uniform_info: Vec<(u32, usize)>,
     library: String,
+    bind_group_layout: wgpu::BindGroupLayout,
 }
 
 impl SimpleBindGroupLayoutProvider {
     pub fn build_bind_group(
         &self,
         device: &Device,
-        entries: &[(BindingEntry, BindingResource)],
+        binding_entries: &[(BindingEntry, BindingResource)],
     ) -> SimpleBindGroupProvider {
+        let uniform_buffers: Vec<Buffer> = self
+            .uniform_info
+            .iter()
+            .map(|(_, size)| {
+                device.create_buffer(&BufferDescriptor {
+                    label: None,
+                    size: *size as u64,
+                    usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })
+            })
+            .collect();
+
+        let mut bg_entries: Vec<BindGroupEntry> = binding_entries
+            .iter()
+            .map(|(entry, resource)| BindGroupEntry {
+                binding: entry.0,
+                resource: resource.clone(),
+            })
+            .collect();
+
+        for (i, (binding_idx, _)) in self.uniform_info.iter().enumerate() {
+            bg_entries.push(BindGroupEntry {
+                binding: *binding_idx,
+                resource: uniform_buffers[i].as_entire_binding(),
+            });
+        }
+
         SimpleBindGroupProvider {
             bind_group: device.create_bind_group(&BindGroupDescriptor {
                 label: None,
-                layout: &self.layout(),
-                entries: &[],
+                layout: &self.bind_group_layout,
+                entries: &bg_entries,
             }),
+            uniform_buffers,
         }
     }
 }
@@ -97,13 +145,15 @@ impl BindGroupLayoutProvider for SimpleBindGroupLayoutProvider {
 }
 
 pub struct SimpleBindGroupLayoutBuilder {
-    entries: Vec<((String, String), BindGroupLayoutEntry)>,
+    entries: Vec<EntryData>,
+    uniform_count: u32,
 }
 
 impl SimpleBindGroupLayoutBuilder {
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
+            uniform_count: 0,
         }
     }
 
@@ -116,7 +166,7 @@ impl SimpleBindGroupLayoutBuilder {
         count: Option<NonZero<u32>>,
     ) -> BindingEntry {
         let binding = self.entries.len() as u32;
-        self.entries.push((
+        self.entries.push(EntryData::Binding(
             (name, wgsl_type_name),
             BindGroupLayoutEntry {
                 binding,
@@ -128,39 +178,116 @@ impl SimpleBindGroupLayoutBuilder {
         BindingEntry(binding)
     }
 
-    pub fn build(self) -> SimpleBindGroupLayoutProvider {
-        let (strings, entries): (Vec<_>, Vec<_>) = self.entries.into_iter().unzip();
-        let library = strings
-            .iter()
-            .enumerate()
-            .map(|(i, (name, tname))| {
-                format!(
-                    "@group(#BIND_GROUP) @binding({})\nvar {}: {};",
-                    i, name, tname
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+    pub fn add_uniform<Ty: UniformType>(&mut self, name: String) -> UniformEntry<Ty> {
+        let uniform_type = Ty::wgsl_uniform_type();
+        let uniform_index = self.uniform_count;
+        self.uniform_count += 1;
+        self.entries
+            .push(EntryData::Uniform(name, uniform_type));
+        UniformEntry(uniform_index, uniform_type.byte_size(), PhantomData)
+    }
 
-        SimpleBindGroupLayoutProvider { entries, library }
+    pub fn build(self, device: &Device) -> SimpleBindGroupLayoutProvider {
+        let mut layout_entries = Vec::new();
+        let mut uniform_info = Vec::new();
+        let mut library_lines = Vec::new();
+
+        for (i, entry) in self.entries.iter().enumerate() {
+            let binding = i as u32;
+            match entry {
+                EntryData::Binding((name, tname), layout_entry) => {
+                    layout_entries.push(*layout_entry);
+                    library_lines.push(format!(
+                        "@group(#BIND_GROUP) @binding({binding})\nvar {name}: {tname};"
+                    ));
+                }
+                EntryData::Uniform(name, uniform_type) => {
+                    layout_entries.push(BindGroupLayoutEntry {
+                        binding,
+                        visibility: ShaderStages::VERTEX_FRAGMENT,
+                        ty: BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: NonZero::new(uniform_type.byte_size() as u64),
+                        },
+                        count: None,
+                    });
+                    uniform_info.push((binding, uniform_type.byte_size()));
+                    let tname = uniform_type.wgsl_type_name();
+                    library_lines.push(format!(
+                        "@group(#BIND_GROUP) @binding({binding})\nvar<uniform> {name}: {tname};"
+                    ));
+                }
+            }
+        }
+
+        let library = library_lines.join("\n");
+
+        let bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("Simple BGLayout"),
+            entries: &layout_entries,
+        });
+
+        SimpleBindGroupLayoutProvider {
+            entries: layout_entries,
+            uniform_info,
+            library,
+            bind_group_layout,
+        }
     }
 }
 
 pub struct BindingEntry(u32);
 
-pub struct UniformEntry<Ty: UniformType>(u32, PhantomData<Ty>);
+/// Typed handle for a uniform entry. Used with [`SimpleBindGroupProvider::set_uniform`].
+/// Stores the uniform buffer index and byte size.
+pub struct UniformEntry<Ty: UniformType>(u32, usize, PhantomData<Ty>);
 
 pub trait UniformType {
     type Resource;
 
     fn set_bytes(res: Self::Resource, bytes: &mut [u8]);
 
-    fn wgsl_type_name() -> &'static str;
+    fn wgsl_uniform_type() -> WgslUniformType;
+}
+
+#[derive(Clone, Copy)]
+pub enum WgslUniformType {
+    Float,
+    Vec2,
+    Vec3,
+    Vec4,
+    Mat3x3,
+    Mat4x4,
+}
+
+impl WgslUniformType {
+    pub fn wgsl_type_name(self) -> &'static str {
+        match self {
+            Self::Float => "f32",
+            Self::Vec2 => "vec2<f32>",
+            Self::Vec3 => "vec3<f32>",
+            Self::Vec4 => "vec4<f32>",
+            Self::Mat3x3 => "mat3x3<f32>",
+            Self::Mat4x4 => "mat4x4<f32>",
+        }
+    }
+
+    pub fn byte_size(self) -> usize {
+        match self {
+            Self::Float => 4,
+            Self::Vec2 => 8,
+            Self::Vec3 => 12,
+            Self::Vec4 => 16,
+            Self::Mat3x3 => 48,
+            Self::Mat4x4 => 64,
+        }
+    }
 }
 
 enum EntryData {
     Binding((String, String), BindGroupLayoutEntry),
-    Uniform(String, Box<dyn UniformType>),
+    Uniform(String, WgslUniformType),
 }
 
 /// Generates and caches a [PipelineLayout] using [BindGroupProviders](BindGroupProvider).  

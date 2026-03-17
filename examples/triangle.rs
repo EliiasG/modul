@@ -17,12 +17,11 @@ use wgpu::{
 };
 use winit::window::WindowAttributes;
 
-
 fn main() {
     run_app(
         DefaultGraphicsInitializer {
             power_preference: PowerPreference::None,
-            window_attribs: WindowAttributes::default(),
+            window_attribs: WindowAttributes::default().with_title("Triangle Example"),
         },
         |app| {
             app.add_plugins((RenderPlugin, ExitPlugin));
