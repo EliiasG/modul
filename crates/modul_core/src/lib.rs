@@ -46,6 +46,9 @@ pub fn run_app(graphics_initializer: impl GraphicsInitializer, setup: impl FnOnc
         .expect("failed to build event loop")
         .run_app(&mut WinitApp {
             app,
+            _instance: None,
+            _adapter: None,
+            _main_window: None,
             initializer: Some(graphics_initializer),
             buffer: EventBuffer(Vec::new()),
         })
@@ -78,8 +81,8 @@ impl EventBuffer {
 #[derive(Resource)]
 pub struct ShouldExit;
 
-#[derive(Resource)]
-pub struct InstanceRes(pub Instance);
+#[derive(Resource, Clone)]
+pub struct InstanceRes(pub Arc<Instance>);
 
 #[derive(Resource)]
 pub struct DefaultSurfaceConfig(pub SurfaceConfiguration);
@@ -213,7 +216,14 @@ impl GraphicsInitializer for DefaultGraphicsInitializer {
 }
 
 struct WinitApp<I: GraphicsInitializer> {
+    // IMPORTANT: field order determines drop order.
+    // `app` (containing the World) must drop FIRST so all GPU objects are released.
+    // Then `_instance` drops (calls eglTerminate, needs the Wayland display alive).
+    // Then `_main_window` drops LAST (closes the Wayland display connection).
     app: SubApp,
+    _instance: Option<Arc<Instance>>,
+    _adapter: Option<Adapter>,
+    _main_window: Option<Arc<Window>>,
     initializer: Option<I>,
     buffer: EventBuffer,
 }
@@ -228,8 +238,13 @@ impl<I: GraphicsInitializer> ApplicationHandler for WinitApp<I> {
         let Some(init) = self.initializer.take() else {
             return;
         };
-        let res = init.initialize(event_loop);
-        add_resources(self.app.world_mut(), res);
+        let mut res = init.initialize(event_loop);
+        // Hold references that must outlive the World to ensure correct drop order.
+        // Instance must outlive all GPU objects; Window must outlive Instance (Wayland display).
+        let instance = Arc::new(mem::replace(&mut res.instance, Instance::default()));
+        self._instance = Some(Arc::clone(&instance));
+        self._main_window = Some(Arc::clone(&res.window));
+        add_resources(self.app.world_mut(), res, instance);
         self.app.world_mut().run_schedule(Init);
         self.app.world_mut().clear_trackers();
     }
@@ -297,9 +312,9 @@ impl<I: GraphicsInitializer> ApplicationHandler for WinitApp<I> {
     }
 }
 
-fn add_resources(world: &mut World, init_res: GraphicsInitializerResult) {
+fn add_resources(world: &mut World, init_res: GraphicsInitializerResult, instance: Arc<Instance>) {
     let id = init_res.window.id();
-    world.insert_resource(InstanceRes(init_res.instance));
+    world.insert_resource(InstanceRes(instance));
     world.insert_resource(AdapterRes(init_res.adapter));
     world.insert_resource(DeviceRes(init_res.device));
     world.insert_resource(QueueRes(init_res.queue));
