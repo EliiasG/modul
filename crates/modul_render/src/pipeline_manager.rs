@@ -64,6 +64,7 @@ pub struct GenericVertexState {
 }
 
 /// Used with [GenericVertexState]
+#[derive(Clone)]
 pub struct GenericVertexBufferLayout {
     pub array_stride: BufferAddress,
     pub step_mode: VertexStepMode,
