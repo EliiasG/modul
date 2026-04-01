@@ -1,15 +1,9 @@
-use crate::RenderPipelineResourceProvider;
-use bevy_ecs::world::{Mut, World};
-use modul_asset::{AssetId, AssetWorldExt};
-use modul_core::DeviceRes;
-use naga_oil::compose::{
-    ComposableModuleDescriptor, Composer, ComposerError, ImportDefinition, NagaModuleDescriptor,
-    ShaderDefValue, ShaderLanguage, ShaderType,
-};
+use bevy_app::{App, Plugin};
+use bevy_ecs::prelude::*;
+use modul_core::{DeviceRes, Init};
 use std::borrow::Cow;
 use std::marker::PhantomData;
 use std::num::NonZero;
-use wgpu::naga::Module;
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor,
     BindGroupLayoutEntry, BindingResource, BindingType, Buffer, BufferDescriptor, BufferUsages,
@@ -17,39 +11,82 @@ use wgpu::{
     ShaderRuntimeChecks, ShaderSource, ShaderStages,
 };
 
-/// Provides a bind group shaders, for static cases use [ConstBindGroupLayoutProvider]
+/// Provides a created bind group layout and its WGSL library source.
+/// Use `#BIND_GROUP` as the bind group index placeholder in the library.
 pub trait BindGroupLayoutProvider {
-    /// The provided layout. May be generated at runtime.  
-    fn layout(&self) -> BindGroupLayoutDescriptor;
+    /// The created bind group layout.
+    fn layout(&self) -> &wgpu::BindGroupLayout;
 
-    /// The naga_oil WGSL source of a library implementing the bind group shader-side.  
-    /// Use #BIND_GROUP as the bind group index
+    /// WGSL source declaring the bind group's bindings.
+    /// Use `#BIND_GROUP` as the group index placeholder.
     fn library(&self) -> &str;
 }
 
-/// [BindGroupLayoutProvider] is automatically implemented for implementations of this.  
-pub trait ConstBindGroupLayoutProvider {
+/// Static definition of a bind group layout. Use with [`CachedBindGroupLayout`] and
+/// [`BindGroupLayoutInitPlugin`] to create and cache the layout as a resource.
+pub trait BindGroupLayoutDef {
     const LAYOUT: &'static BindGroupLayoutDescriptor<'static>;
-
     const LIBRARY: &'static str;
 }
 
-impl<T: ConstBindGroupLayoutProvider> BindGroupLayoutProvider for T {
-    fn layout(&self) -> BindGroupLayoutDescriptor {
-        T::LAYOUT.clone()
-    }
+/// Cached bind group layout created from a [`BindGroupLayoutDef`].
+/// Insert as a resource via [`BindGroupLayoutInitPlugin`].
+#[derive(Resource)]
+pub struct CachedBindGroupLayout<P: BindGroupLayoutDef> {
+    layout: wgpu::BindGroupLayout,
+    _marker: PhantomData<P>,
+}
 
-    fn library(&self) -> &str {
-        T::LIBRARY
+impl<P: BindGroupLayoutDef> CachedBindGroupLayout<P> {
+    pub fn new(device: &Device) -> Self {
+        Self {
+            layout: device.create_bind_group_layout(P::LAYOUT),
+            _marker: PhantomData,
+        }
     }
 }
 
-pub trait BindGroupProvider {
-    /*
-    type Layout: BindGroupLayoutProvider + Send + Sync;
-    fn layout(&self) -> AssetId<Self::Layout>;
-     */
+impl<P: BindGroupLayoutDef + Send + Sync + 'static> BindGroupLayoutProvider
+    for CachedBindGroupLayout<P>
+{
+    fn layout(&self) -> &wgpu::BindGroupLayout {
+        &self.layout
+    }
 
+    fn library(&self) -> &str {
+        P::LIBRARY
+    }
+}
+
+/// Plugin that creates a [`CachedBindGroupLayout<P>`] resource during [`Init`].
+pub struct BindGroupLayoutInitPlugin<P: BindGroupLayoutDef> {
+    _marker: PhantomData<P>,
+}
+
+impl<P: BindGroupLayoutDef> BindGroupLayoutInitPlugin<P> {
+    pub fn new() -> Self {
+        Self {
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<P: BindGroupLayoutDef + Send + Sync + 'static> Plugin for BindGroupLayoutInitPlugin<P> {
+    fn build(&self, app: &mut App) {
+        app.add_systems(Init, init_bind_group_layout::<P>);
+    }
+}
+
+fn init_bind_group_layout<P: BindGroupLayoutDef + Send + Sync + 'static>(
+    mut commands: Commands,
+    device: Res<DeviceRes>,
+) {
+    commands.insert_resource(CachedBindGroupLayout::<P>::new(&device.0));
+}
+
+// --- BindGroupProvider ---
+
+pub trait BindGroupProvider {
     fn bind_group(&self) -> &BindGroup;
 }
 
@@ -78,8 +115,9 @@ impl BindGroupProvider for SimpleBindGroupProvider {
     }
 }
 
+// --- SimpleBindGroupLayoutProvider ---
+
 pub struct SimpleBindGroupLayoutProvider {
-    entries: Vec<BindGroupLayoutEntry>,
     /// (binding index, byte size) for each uniform
     uniform_info: Vec<(u32, usize)>,
     library: String,
@@ -132,17 +170,16 @@ impl SimpleBindGroupLayoutProvider {
 }
 
 impl BindGroupLayoutProvider for SimpleBindGroupLayoutProvider {
-    fn layout(&self) -> BindGroupLayoutDescriptor {
-        BindGroupLayoutDescriptor {
-            label: Some("Simple BGLayout"),
-            entries: &self.entries,
-        }
+    fn layout(&self) -> &wgpu::BindGroupLayout {
+        &self.bind_group_layout
     }
 
     fn library(&self) -> &str {
         &self.library
     }
 }
+
+// --- SimpleBindGroupLayoutBuilder ---
 
 pub struct SimpleBindGroupLayoutBuilder {
     entries: Vec<EntryData>,
@@ -229,7 +266,6 @@ impl SimpleBindGroupLayoutBuilder {
         });
 
         SimpleBindGroupLayoutProvider {
-            entries: layout_entries,
             uniform_info,
             library,
             bind_group_layout,
@@ -290,11 +326,14 @@ enum EntryData {
     Uniform(String, WgslUniformType),
 }
 
-/// Generates and caches a [PipelineLayout] using [BindGroupProviders](BindGroupProvider).  
-/// Also generates shaders, since they need information about bind groups.  
-/// Can be used as a [RenderPipelineResourceProvider] using a [ComposedPipelineResourceProvider].  
+// --- PipelineLayoutComposer ---
+
+/// Composes a pipeline layout and shader from multiple [`BindGroupLayoutProvider`]s.
+/// Bind group WGSL libraries are concatenated with `#BIND_GROUP` replaced by the group index.
+/// Additional WGSL snippets can be prepended before the main shader source.
 pub struct PipelineLayoutComposer {
     source: Vec<Box<dyn BindGroupLayoutProvider + Send + Sync>>,
+    snippets: Vec<String>,
     composed: Option<PipelineLayout>,
     compiled_shader: Option<ShaderModule>,
     checks: Option<ShaderRuntimeChecks>,
@@ -304,6 +343,7 @@ impl PipelineLayoutComposer {
     pub fn new() -> Self {
         Self {
             source: Vec::new(),
+            snippets: Vec::new(),
             composed: None,
             compiled_shader: None,
             checks: None,
@@ -319,8 +359,10 @@ impl PipelineLayoutComposer {
         }
     }
 
+    /// Add a bind group layout provider. The provider's WGSL library will be included
+    /// in composed shaders with `#BIND_GROUP` replaced by the group index.
     #[inline]
-    pub fn add_bind_group_layout(
+    pub fn add_bind_group(
         &mut self,
         group: impl BindGroupLayoutProvider + Send + Sync + 'static,
     ) -> &mut Self {
@@ -330,51 +372,66 @@ impl PipelineLayoutComposer {
         self
     }
 
-    /// Will compose and cache the pipeline layout.
-    /// Safe to call many times, as it caches and only reallocated if there are changes.  
+    /// Add a WGSL snippet that will be included before the main shader source.
+    /// Use this for shared utility functions (e.g. lighting, depth reconstruction).
+    #[inline]
+    pub fn add_snippet(&mut self, source: impl Into<String>) -> &mut Self {
+        self.snippets.push(source.into());
+        self.compiled_shader = None;
+        self
+    }
+
+    /// Compose and cache the pipeline layout from the added bind group providers.
     pub fn compose_pipeline_layout(&mut self, device: &Device) -> &PipelineLayout {
         self.composed.get_or_insert_with(|| {
-            let layouts = self
-                .source
-                .iter()
-                .map(|d| device.create_bind_group_layout(&d.layout()))
-                .collect::<Vec<_>>();
+            let layouts: Vec<&wgpu::BindGroupLayout> =
+                self.source.iter().map(|p| p.layout()).collect();
             device.create_pipeline_layout(&PipelineLayoutDescriptor {
-                label: Some("Composed pipeline layout".into()),
-                // must iter twice, once to gen owned values, then reference them
-                bind_group_layouts: &layouts.iter().collect::<Vec<_>>(),
+                label: Some("Composed pipeline layout"),
+                bind_group_layouts: &layouts,
                 push_constant_ranges: &[],
             })
         })
     }
 
     /// Gets the currently cached pipeline layout.
-    /// The currently cached layout will be automatically invalidated when changes are made.
     #[inline]
     pub fn get_pipeline_layout(&self) -> Option<&PipelineLayout> {
         self.composed.as_ref()
     }
 
-    /// Will compose a naga module, adding shader libraries from bind groups, and cache the result.
-    /// Safe to call many times, as it caches and only reallocated if there are changes.  
+    /// Compose and cache a shader module from bind group libraries, snippets, and the main source.
     pub fn compose_shader(
         &mut self,
         device: &Device,
-        composer: &mut Composer,
-        desc: NagaModuleDescriptor,
-    ) -> Result<&ShaderModule, ComposerError> {
-        // cannot use if let as it borrows and causes lifetime issues...
+        label: &str,
+        main_source: &str,
+    ) -> &ShaderModule {
         if self.compiled_shader.is_some() {
-            return Ok(self.compiled_shader.as_ref().unwrap());
+            return self.compiled_shader.as_ref().unwrap();
         }
 
-        let name = format!("naga_oil shader: {}", desc.file_path);
+        let mut full_source = String::new();
 
-        let res = self.generate_module(composer, desc)?;
+        // Bind group declarations
+        for (i, group) in self.source.iter().enumerate() {
+            let lib = group.library().replace("#BIND_GROUP", &i.to_string());
+            full_source.push_str(&lib);
+            full_source.push('\n');
+        }
+
+        // Shared snippets
+        for snippet in &self.snippets {
+            full_source.push_str(snippet);
+            full_source.push('\n');
+        }
+
+        // Main shader
+        full_source.push_str(main_source);
 
         let desc = ShaderModuleDescriptor {
-            label: Some(&name),
-            source: ShaderSource::Naga(Cow::Owned(res)),
+            label: Some(label),
+            source: ShaderSource::Wgsl(Cow::Owned(full_source)),
         };
 
         self.compiled_shader = Some(match self.checks {
@@ -382,97 +439,12 @@ impl PipelineLayoutComposer {
             Some(checks) => unsafe { device.create_shader_module_trusted(desc, checks) },
         });
 
-        Ok(self.compiled_shader.as_ref().unwrap())
+        self.compiled_shader.as_ref().unwrap()
     }
 
     /// Gets the currently cached shader module.
-    /// The currently cached module will be automatically invalidated when changes are made.
     #[inline]
     pub fn get_shader_module(&self) -> Option<&ShaderModule> {
         self.compiled_shader.as_ref()
-    }
-
-    fn generate_module(
-        &mut self,
-        composer: &mut Composer,
-        desc: NagaModuleDescriptor,
-    ) -> Result<Module, ComposerError> {
-        let mut deps = Vec::new();
-        for (i, group) in self.source.iter().enumerate() {
-            let str_i = i.to_string();
-            let name = format!("GEN_bindgroup_X_{i}");
-            deps.push(name.clone());
-            let mod_source = group.library().to_string().replace("#BIND_GROUP", &str_i);
-            composer.add_composable_module(ComposableModuleDescriptor {
-                source: &mod_source,
-                file_path: &format!("bind_group_shader_{str_i}"),
-                language: ShaderLanguage::Wgsl,
-                as_name: Some(name),
-                additional_imports: &[],
-                shader_defs: Default::default(),
-            })?;
-        }
-        let res = composer.make_naga_module(desc)?;
-        for dep in &deps {
-            composer.remove_composable_module(dep);
-        }
-        Ok(res)
-    }
-}
-
-pub struct StaticNagaModuleDescriptor {
-    pub source: String,
-    pub file_path: String,
-    pub shader_type: ShaderType,
-    pub shader_defs: std::collections::HashMap<String, ShaderDefValue>,
-    pub additional_imports: Vec<ImportDefinition>,
-}
-
-impl StaticNagaModuleDescriptor {
-    pub fn get(&self) -> NagaModuleDescriptor {
-        NagaModuleDescriptor {
-            source: &self.source,
-            file_path: &self.file_path,
-            shader_type: self.shader_type,
-            // unfortunately seems required
-            shader_defs: self.shader_defs.clone(),
-            additional_imports: &self.additional_imports,
-        }
-    }
-}
-
-/// Implements [RenderPipelineResourceProvider]
-pub struct ComposedPipelineResourceProvider {
-    pub generator: AssetId<PipelineLayoutComposer>,
-    pub desc: AssetId<StaticNagaModuleDescriptor>,
-    // FIXME possibly abstract where the composer comes from
-    pub composer: AssetId<Composer>,
-}
-
-impl RenderPipelineResourceProvider for ComposedPipelineResourceProvider {
-    fn update(&self, world: &mut World) {
-        world.resource_scope(|world, device_res: Mut<DeviceRes>| {
-            world
-                .asset_mut(self.generator)
-                .compose_pipeline_layout(&device_res.0);
-            world.asset_scope(self.generator, |world, g| {
-                world.asset_scope(self.composer, |world, c| {
-                    g.compose_shader(&device_res.0, c, world.asset(self.desc).get())
-                        .expect("failed to compose shader");
-                });
-            });
-        });
-    }
-
-    fn get_pipeline_layout<'a>(&self, world: &'a World) -> &'a PipelineLayout {
-        world.asset(self.generator).get_pipeline_layout().unwrap()
-    }
-
-    fn get_vertex_shader_module<'a>(&self, world: &'a World) -> &'a ShaderModule {
-        world.asset(self.generator).get_shader_module().unwrap()
-    }
-
-    fn get_fragment_shader_module<'a>(&self, world: &'a World) -> &'a ShaderModule {
-        self.get_vertex_shader_module(world)
     }
 }
