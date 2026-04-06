@@ -35,7 +35,7 @@ struct TrianglePipeline(AssetId<RenderPipelineManager>);
 
 fn init_color(mut commands: Commands, query: Query<Entity, With<MainWindow>>) {
     commands
-        .entity(query.single())
+        .entity(query.single().unwrap())
         .insert(InitialSurfaceConfig(SurfaceRenderTargetConfig {
             color_config: RenderTargetColorConfig {
                 multisample_config: Some(RenderTargetMultisampleConfig { sample_count: 4 }),
@@ -111,7 +111,7 @@ fn init_sequence(
     mut sequence_assets: ResMut<Assets<Sequence>>,
     mut commands: Commands,
 ) {
-    let render_target = RenderTargetSource::Surface(surface_query.single());
+    let render_target = RenderTargetSource::Surface(surface_query.single().unwrap());
     let mut builder = SequenceBuilder::new();
     builder
         .add(ClearNext { render_target })

@@ -36,7 +36,7 @@ fn init_sequence(
     mut sequence_assets: ResMut<Assets<Sequence>>,
     mut commands: Commands,
 ) {
-    let win_id = surface_query.single();
+    let win_id = surface_query.single().unwrap();
     commands.entity(win_id).insert(MyWindow { offset: 0 });
     
     let render_target = RenderTargetSource::Surface(win_id);

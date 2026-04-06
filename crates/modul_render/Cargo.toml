@@ -9,8 +9,8 @@ description = "Currently just reserved, planning to create a simple game/app eng
 modul_core = {path = "../modul_core"}
 modul_asset = {path = "../modul_asset"}
 modul_util = {path = "../modul_util"}
-bevy_app = "0.15"
-bevy_ecs = "0.15"
+bevy_app = "0.18"
+bevy_ecs = "0.18"
 wgpu = "24.0"
 winit = "0.30"
 log = "0.4"

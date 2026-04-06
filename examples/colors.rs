@@ -28,7 +28,7 @@ fn init_sequence(
     mut sequence_assets: ResMut<Assets<Sequence>>,
     mut commands: Commands,
 ) {
-    let render_target = RenderTargetSource::Surface(surface_query.single());
+    let render_target = RenderTargetSource::Surface(surface_query.single().unwrap());
     let mut builder = SequenceBuilder::new();
     builder
         .add(ClearNext { render_target })
@@ -43,7 +43,7 @@ fn set_color(
 ) {
     frame_count.0 += 1;
     
-    let Ok(mut rt) = surface_query.get_single_mut() else {
+    let Ok(mut rt) = surface_query.single_mut() else {
         return;
     };
     rt.set_clear_color(Color {

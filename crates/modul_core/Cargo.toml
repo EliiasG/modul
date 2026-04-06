@@ -6,8 +6,8 @@ license = "MIT OR Apache-2.0"
 description = "Currently just reserved, planning to create a simple game/app engine based on bevy_ecs"
 
 [dependencies]
-bevy_app = "0.15"
-bevy_ecs = "0.15"
+bevy_app = "0.18"
+bevy_ecs = "0.18"
 wgpu = "24.0"
 winit = "0.30"
 env_logger = "0.11"

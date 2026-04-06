@@ -3,7 +3,6 @@ use bevy_ecs::prelude::*;
 use modul_util::HashMap;
 use std::hash::Hash;
 use std::marker::PhantomData;
-use bevy_ecs::entity::EntityHasher;
 
 #[derive(Resource)]
 pub struct Assets<T> {

@@ -27,7 +27,7 @@ impl Plugin for ExitPlugin {
                     } = e
                     {
                         let e = window_map.get(window_id).unwrap();
-                        if e == main.single() {
+                        if e == main.single().unwrap() {
                             commands.insert_resource(ShouldExit);
                         }
                     }
