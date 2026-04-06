@@ -1,7 +1,7 @@
 /// Triangle rendering using the low level functions of modul.
 use bevy_ecs::prelude::*;
 use modul::asset::{AssetId, AssetWorldExt, Assets};
-use modul::core::{run_app, DefaultGraphicsInitializer, DeviceRes, Init, MainWindow};
+use modul::core::{run_app, DefaultGraphicsInitializer, Init, MainWindow, RenderContext};
 use modul::render::{
     ClearNext, GenericFragmentState, GenericMultisampleState, GenericRenderPipelineDescriptor,
     GenericVertexState, InitialSurfaceConfig, Operation, OperationBuilder, RenderPipelineManager,
@@ -58,16 +58,16 @@ fn init_color(mut commands: Commands, query: Query<Entity, With<MainWindow>>) {
 
 fn init_pipeline(
     mut commands: Commands,
-    device: Res<DeviceRes>,
+    ctx: Res<RenderContext>,
     mut shaders: ResMut<Assets<ShaderModule>>,
     mut layouts: ResMut<Assets<PipelineLayout>>,
     mut piplines: ResMut<Assets<RenderPipelineManager>>,
 ) {
-    let shader = shaders.add(device.0.create_shader_module(ShaderModuleDescriptor {
+    let shader = shaders.add(ctx.device.create_shader_module(ShaderModuleDescriptor {
         label: None,
         source: ShaderSource::Wgsl(include_str!("assets/triangle.wgsl").into()),
     }));
-    let layout = layouts.add(device.0.create_pipeline_layout(&PipelineLayoutDescriptor {
+    let layout = layouts.add(ctx.device.create_pipeline_layout(&PipelineLayoutDescriptor {
         label: None,
         bind_group_layouts: &[],
         immediate_size: 0,

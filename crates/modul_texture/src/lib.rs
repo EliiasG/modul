@@ -4,7 +4,7 @@ use bevy_app::{App, Plugin};
 use bevy_ecs::{prelude::*, system::SystemParam};
 use image::{DynamicImage, ImageError, ImageReader};
 use modul_asset::{AssetAppExt, AssetId, Assets};
-use modul_core::{DeviceRes, QueueRes};
+use modul_core::RenderContext;
 use modul_render::PreDraw;
 use std::{
     error::Error,
@@ -335,15 +335,16 @@ struct TextureInitInfo {
 fn load_textures(
     mut texture_queue: ResMut<TextureQueue>,
     mut texture_assets: ResMut<Assets<ViewTexture>>,
-    device: Res<DeviceRes>,
-    queue: Res<QueueRes>,
+    ctx: Res<RenderContext>,
 ) {
     for op in texture_queue.queue.drain(..) {
         match op {
             TextureOperation::InitTexture(info) => {
-                init_texture(info, &mut texture_assets, &device.0)
+                init_texture(info, &mut texture_assets, &ctx.device)
             }
-            TextureOperation::WriteTexture(info) => write_texture(info, &texture_assets, &queue.0),
+            TextureOperation::WriteTexture(info) => {
+                write_texture(info, &texture_assets, &ctx.queue)
+            }
         }
     }
 }

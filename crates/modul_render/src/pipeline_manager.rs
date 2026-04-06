@@ -1,6 +1,6 @@
 use crate::RenderTargetSource;
 use bevy_ecs::world::World;
-use modul_core::DeviceRes;
+use modul_core::RenderContext;
 use modul_util::HashMap;
 use wgpu::{
     BlendState, BufferAddress, ColorTargetState, ColorWrites, CompareFunction, DepthBiasState,
@@ -146,7 +146,7 @@ impl RenderPipelineManager {
         self.instances.entry(params.clone()).or_insert_with(|| {
             self.desc.resource_provider.update(world);
 
-            let device = &world.resource::<DeviceRes>().0;
+            let device = &world.resource::<RenderContext>().device;
 
             let vs_module = self.desc.resource_provider.get_vertex_shader_module(world);
             let fs_module = self

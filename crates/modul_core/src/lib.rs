@@ -88,20 +88,19 @@ impl EventBuffer {
 #[derive(Resource)]
 pub struct ShouldExit;
 
-#[derive(Resource, Clone)]
-pub struct InstanceRes(pub Arc<Instance>);
+/// Bundles the four core wgpu resources into a single ECS resource so
+/// systems that need a [Device] and a [Queue] only take one [Res] parameter.
+/// Systems requiring just one of these still access via the named field.
+#[derive(Resource)]
+pub struct RenderContext {
+    pub instance: Arc<Instance>,
+    pub adapter: Adapter,
+    pub device: Device,
+    pub queue: Queue,
+}
 
 #[derive(Resource)]
 pub struct DefaultSurfaceConfig(pub SurfaceConfiguration);
-
-#[derive(Resource)]
-pub struct AdapterRes(pub Adapter);
-
-#[derive(Resource)]
-pub struct DeviceRes(pub Device);
-
-#[derive(Resource)]
-pub struct QueueRes(pub Queue);
 
 /// Preferred format for surfaces
 #[derive(Resource)]
@@ -301,7 +300,7 @@ impl<I: GraphicsInitializer> ApplicationHandler for WinitApp<I> {
             self.app
                 .world_mut()
                 .resource_scope(|world, mut cw: Mut<CreatedWindows>| {
-                    world.resource_scope(|world, instance: Mut<InstanceRes>| {
+                    world.resource_scope(|world, ctx: Mut<RenderContext>| {
                         for (entity, window_attribs) in
                             world.resource_mut::<WindowRequests>().0.drain(..)
                         {
@@ -310,8 +309,8 @@ impl<I: GraphicsInitializer> ApplicationHandler for WinitApp<I> {
                                     .create_window(window_attribs)
                                     .expect("failed to create window"),
                             );
-                            let surface = instance
-                                .0
+                            let surface = ctx
+                                .instance
                                 .create_surface(window.clone())
                                 .expect("no surface?");
                             cw.0.push((entity, WindowComponent { window, surface }))
@@ -347,10 +346,12 @@ impl<I: GraphicsInitializer> ApplicationHandler for WinitApp<I> {
 
 fn add_resources(world: &mut World, init_res: GraphicsInitializerResult, instance: Arc<Instance>) {
     let id = init_res.window.id();
-    world.insert_resource(InstanceRes(instance));
-    world.insert_resource(AdapterRes(init_res.adapter));
-    world.insert_resource(DeviceRes(init_res.device));
-    world.insert_resource(QueueRes(init_res.queue));
+    world.insert_resource(RenderContext {
+        instance,
+        adapter: init_res.adapter,
+        device: init_res.device,
+        queue: init_res.queue,
+    });
     world.insert_resource(SurfaceFormat(init_res.surface_format));
     let e = world.spawn((
         WindowComponent {

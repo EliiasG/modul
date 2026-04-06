@@ -1,7 +1,7 @@
 use crate::render_target::{OffscreenRenderTarget, RenderTarget, SurfaceRenderTarget};
 use bevy_ecs::prelude::*;
 use modul_asset::{AssetId, Assets};
-use modul_core::{DeviceRes, QueueRes};
+use modul_core::RenderContext;
 use std::iter;
 use std::ops::{Deref, DerefMut};
 use wgpu::{CommandEncoder, CommandEncoderDescriptor, Device};
@@ -85,7 +85,7 @@ pub struct Sequence {
 impl Sequence {
     fn run(&mut self, command_encoder: &mut CommandEncoder, world: &mut World) {
         if let InnerSequence::UnInitialized(builders) = &mut self.inner {
-            let device = &world.resource::<DeviceRes>().0;
+            let device = &world.resource::<RenderContext>().device;
             let mut operations = Vec::new();
             let mut needs_resolving = HashSet::<RenderTargetSource>::new();
             for builder in builders {
@@ -198,13 +198,12 @@ pub(crate) fn run_sequences(world: &mut World) {
         }
         world.resource_scope(|world, sequence_queue: Mut<RunningSequenceQueue>| {
             // FIXME maybe use multiple command encoders and run in parallel??
-            let mut command_encoder =
-                world
-                    .resource::<DeviceRes>()
-                    .0
-                    .create_command_encoder(&CommandEncoderDescriptor {
-                        label: Some("Sequence runner encoder"),
-                    });
+            let mut command_encoder = world
+                .resource::<RenderContext>()
+                .device
+                .create_command_encoder(&CommandEncoderDescriptor {
+                    label: Some("Sequence runner encoder"),
+                });
             for asset_id in &sequence_queue.0 .0 {
                 sequence_assets
                     .get_mut(*asset_id)
@@ -212,8 +211,8 @@ pub(crate) fn run_sequences(world: &mut World) {
                     .run(&mut command_encoder, world)
             }
             world
-                .resource::<QueueRes>()
-                .0
+                .resource::<RenderContext>()
+                .queue
                 .submit(iter::once(command_encoder.finish()));
         });
     });

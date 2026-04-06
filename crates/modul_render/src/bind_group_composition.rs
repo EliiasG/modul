@@ -1,6 +1,6 @@
 use bevy_app::{App, Plugin};
 use bevy_ecs::prelude::*;
-use modul_core::{DeviceRes, Init};
+use modul_core::{Init, RenderContext};
 use std::borrow::Cow;
 use std::marker::PhantomData;
 use std::num::NonZero;
@@ -79,9 +79,9 @@ impl<P: BindGroupLayoutDef + Send + Sync + 'static> Plugin for BindGroupLayoutIn
 
 fn init_bind_group_layout<P: BindGroupLayoutDef + Send + Sync + 'static>(
     mut commands: Commands,
-    device: Res<DeviceRes>,
+    ctx: Res<RenderContext>,
 ) {
-    commands.insert_resource(CachedBindGroupLayout::<P>::new(&device.0));
+    commands.insert_resource(CachedBindGroupLayout::<P>::new(&ctx.device));
 }
 
 // --- BindGroupProvider ---

@@ -8,7 +8,7 @@ use bevy_ecs::prelude::*;
 use bevy_ecs::schedule::ScheduleLabel;
 use modul_asset::AssetAppExt;
 use modul_core::{
-    AdapterRes, DeviceRes, EventBuffer, ImportantWindow, Redraw, ShouldExit, SurfaceFormat,
+    EventBuffer, ImportantWindow, Redraw, RenderContext, ShouldExit, SurfaceFormat,
     UpdatingWindow, WindowComponent, WindowMap,
 };
 use wgpu::{PipelineLayout, ShaderModule};
@@ -108,7 +108,7 @@ pub struct InitialSurfaceConfig(pub SurfaceRenderTargetConfig);
 
 fn handle_events(
     mut commands: Commands,
-    device: Res<DeviceRes>,
+    ctx: Res<RenderContext>,
     events: ResMut<EventBuffer>,
     map: Res<WindowMap>,
     mut window_query: Query<(
@@ -117,7 +117,7 @@ fn handle_events(
         Has<ImportantWindow>,
     )>,
 ) {
-    
+
     for e in events.events().iter() {
         let Event::WindowEvent { window_id, event } = e else {
             continue;
@@ -133,7 +133,7 @@ fn handle_events(
         if let WindowEvent::Resized(size) = event {
             render_target.set_size((size.width, size.height));
         } else if let WindowEvent::RedrawRequested = event {
-            match render_target.update(&device.0, &win.surface) {
+            match render_target.update(&ctx.device, &win.surface) {
                 SurfaceUpdateStatus::Ready | SurfaceUpdateStatus::ReadySuboptimal => {}
                 SurfaceUpdateStatus::Skipped => {
                     win.window.request_redraw();
@@ -152,7 +152,7 @@ fn handle_events(
 
 fn create_surface_targets(
     mut commands: Commands,
-    adapter: Res<AdapterRes>,
+    ctx: Res<RenderContext>,
     format: Res<SurfaceFormat>,
     window_query: Query<
         (Entity, &WindowComponent, Option<&InitialSurfaceConfig>),
@@ -161,7 +161,7 @@ fn create_surface_targets(
 ) {
     for (e, WindowComponent { window, surface }, cfg) in window_query.iter() {
         let mut rt = SurfaceRenderTarget::new(cfg.map(|r| r.0.clone()).unwrap_or_default());
-        rt.init(format.0, surface.get_capabilities(&adapter.0));
+        rt.init(format.0, surface.get_capabilities(&ctx.adapter));
         let s = window.inner_size();
         rt.set_size((s.width, s.height));
         commands.entity(e).insert(rt).remove::<InitialSurfaceConfig>();
@@ -178,11 +178,11 @@ fn draw(world: &mut World) {
 }
 
 fn apply_offscreen_targets(
-    device: Res<DeviceRes>,
+    ctx: Res<RenderContext>,
     mut target_query: Query<&mut OffscreenRenderTarget>,
 ) {
     for mut rt in target_query.iter_mut() {
-        rt.apply_changes(&device.0);
+        rt.apply_changes(&ctx.device);
     }
 }
 
