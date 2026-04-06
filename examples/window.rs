@@ -5,9 +5,10 @@ use modul_render::RenderPlugin;
 use modul_util::ExitPlugin;
 
 fn main() {
-    run_app(DefaultGraphicsInitializer { 
+    run_app(DefaultGraphicsInitializer {
         power_preference: PowerPreference::None,
         window_attribs: WindowAttributes::default(),
+        ..Default::default()
     }, |app| {
         app.add_plugins((RenderPlugin, ExitPlugin));
     });

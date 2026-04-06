@@ -1,3 +1,10 @@
+// Re-exported so downstream consumers inherit modul's pin and don't have
+// to maintain a parallel `wgpu`/`winit` dependency in their own Cargo.toml.
+// Always prefer `modul_core::wgpu::*` and `modul_core::winit::*` over a
+// direct dependency to avoid version-mismatch errors.
+pub use wgpu;
+pub use winit;
+
 use bevy_app::{PluginsState, SubApp};
 use bevy_ecs::entity::EntityHashMap;
 use bevy_ecs::prelude::*;
@@ -158,11 +165,39 @@ pub struct GraphicsInitializerResult {
 
 pub trait GraphicsInitializer: Send + Sync + 'static {
     fn initialize(self, event_loop: &ActiveEventLoop) -> GraphicsInitializerResult;
+
+    /// Picks the preferred [TextureFormat] for a surface from its capabilities.
+    /// Override to support HDR, linear, or non-sRGB pipelines. The default
+    /// implementation picks the first sRGB format, falling back to the first
+    /// available format if none are sRGB.
+    ///
+    /// Note: implementors that override [Self::initialize] are expected to call
+    /// `self.pick_surface_format(...)` somewhere in their implementation.
+    fn pick_surface_format(&self, caps: &wgpu::SurfaceCapabilities) -> TextureFormat {
+        caps.formats
+            .iter()
+            .copied()
+            .find(|f| f.is_srgb())
+            .unwrap_or_else(|| caps.formats[0])
+    }
 }
 
 pub struct DefaultGraphicsInitializer {
     pub power_preference: PowerPreference,
     pub window_attribs: WindowAttributes,
+    pub required_features: wgpu::Features,
+    pub required_limits: wgpu::Limits,
+}
+
+impl Default for DefaultGraphicsInitializer {
+    fn default() -> Self {
+        Self {
+            power_preference: PowerPreference::default(),
+            window_attribs: WindowAttributes::default(),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::default(),
+        }
+    }
 }
 
 impl GraphicsInitializer for DefaultGraphicsInitializer {
@@ -190,18 +225,16 @@ impl GraphicsInitializer for DefaultGraphicsInitializer {
         }))
         .expect("no adapter?");
 
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&DeviceDescriptor::default()))
-                .expect("no device?");
+        let (device, queue) = pollster::block_on(adapter.request_device(&DeviceDescriptor {
+            label: None,
+            required_features: self.required_features,
+            required_limits: self.required_limits.clone(),
+            ..Default::default()
+        }))
+        .expect("no device?");
 
-        let surface_format = surface
-            .get_capabilities(&adapter)
-            .formats
-            .iter()
-            .copied()
-            .filter(|f| f.is_srgb())
-            .next()
-            .expect("SRGB not supported, this is strange...");
+        let surface_caps = surface.get_capabilities(&adapter);
+        let surface_format = self.pick_surface_format(&surface_caps);
         GraphicsInitializerResult {
             window,
             surface,

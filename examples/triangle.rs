@@ -22,6 +22,7 @@ fn main() {
         DefaultGraphicsInitializer {
             power_preference: PowerPreference::None,
             window_attribs: WindowAttributes::default().with_title("Triangle Example"),
+            ..Default::default()
         },
         |app| {
             app.add_plugins((RenderPlugin, ExitPlugin));
