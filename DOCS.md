@@ -2,6 +2,13 @@
 
 A modular game/rendering engine built on Bevy ECS with wgpu. The goal is to provide a renderer that is simple and easy to modify at every level of abstraction.
 
+> **Best practice for downstream consumers:** import wgpu and winit types
+> via `modul_core::wgpu` and `modul_core::winit` rather than adding them
+> to your own `Cargo.toml`. modul re-exports them so your code automatically
+> inherits the same pinned major version. Mixing modul's wgpu with your
+> own causes confusing "expected `wgpu::Device`, found `wgpu::Device`"
+> errors at compile time.
+
 ## Architecture Overview
 
 The engine is organized as a Cargo workspace with six interconnected crates:
@@ -46,14 +53,11 @@ The main entry point. Creates the winit event loop, initializes graphics via the
 
 | Resource | Description |
 |----------|-------------|
-| `InstanceRes` | wgpu Instance |
-| `DeviceRes` | wgpu Device |
-| `QueueRes` | wgpu Queue |
-| `AdapterRes` | wgpu Adapter |
-| `SurfaceFormat` | Default surface texture format |
-| `WindowMap` | Maps winit WindowId to ECS Entity |
-| `EventBuffer` | Accumulated window/device events |
-| `ShouldExit` | Set to true to exit the app |
+| `RenderContext` | Bundled wgpu `instance` / `adapter` / `device` / `queue`. Take `Res<RenderContext>` in any system that touches wgpu. |
+| `SurfaceFormat` | Default surface texture format chosen by the active `GraphicsInitializer` |
+| `WindowMap` | Maps winit `WindowId` to ECS `Entity` |
+| `EventBuffer` | winit events accumulated since the last `Redraw` |
+| `ShouldExit` | Insert this resource to exit at the end of the current `Redraw` |
 
 ### Window Components
 
@@ -67,7 +71,24 @@ The main entry point. Creates the winit event loop, initializes graphics via the
 
 ### Graphics Initialization
 
-The `GraphicsInitializer` trait allows customizing GPU setup. `DefaultGraphicsInitializer` provides sensible defaults for device, adapter, and surface creation.
+The `GraphicsInitializer` trait allows customizing GPU setup. `DefaultGraphicsInitializer` provides sensible defaults for device, adapter, and surface creation, and exposes:
+
+- `power_preference` — `wgpu::PowerPreference`
+- `window_attribs` — `winit::window::WindowAttributes`
+- `required_features` — `wgpu::Features` to opt into beyond the spec minimum
+- `required_limits` — `wgpu::Limits` to opt into higher resource limits
+
+It implements `Default` so use struct-update syntax to set only the fields you care about:
+
+```rust
+DefaultGraphicsInitializer {
+    window_attribs: WindowAttributes::default().with_title("hello"),
+    required_features: wgpu::Features::PUSH_CONSTANTS,
+    ..Default::default()
+}
+```
+
+The trait also has a `pick_surface_format(&self, caps)` method with a default implementation that picks the first sRGB format. Override it to support HDR or linear pipelines.
 
 ---
 
@@ -155,6 +176,7 @@ Two types implementing the `RenderTarget` trait:
 - Optional depth/stencil
 - Present mode configuration (VSync, NoVsync, Auto variants)
 - Handles surface reconfiguration on resize
+- `update(device, surface)` returns a `SurfaceUpdateStatus` (`Ready`, `ReadySuboptimal`, `Skipped`, `Failed`). The `ReadySuboptimal` case lets the renderer keep drawing the current frame while reconfiguring for the next, eliminating black-frame flicker on resize.
 
 **`OffscreenRenderTarget`** (Component) - Renders to textures:
 - Optional color, depth/stencil, multisampling
@@ -169,31 +191,36 @@ Two types implementing the `RenderTarget` trait:
 
 ### Pipeline Management
 
-**`RenderPipelineManager`** - Caches pipeline instances for different render target configurations:
+**`RenderPipelineManager`** - Caches one `RenderPipeline` per `(color_format, depth_stencil_format, sample_count)` tuple:
 ```rust
-manager.get(device, color_format, depth_format, samples)
-manager.get_compatible(device, render_target)
+let pipeline = manager.get(&mut world, &PipelineParameters {
+    color_format: Some(format),
+    depth_stencil_format: None,
+    sample_count: 4,
+});
+// Or pick parameters from a target automatically:
+let pipeline = manager.get_compatible(render_target_source, &mut world);
 ```
 
 **`GenericRenderPipelineDescriptor`** - Pipeline descriptor without format info, allowing pipeline creation for any render target format at runtime.
 
-**`RenderPipelineResourceProvider`** trait - Abstracts shader module and layout sources for pipeline creation.
+**`RenderPipelineResourceProvider`** trait - Abstracts shader module and pipeline layout sources for pipeline creation. The simplest implementation is `DirectRenderPipelineResourceProvider`, which takes asset IDs.
 
 ### Bind Group Composition
 
-A system for defining self-contained bind groups — each owning its GPU layout, WGSL shader declarations, and buffer management — then composing them into a final pipeline. Each bind group is an independent module you can swap or reuse without touching the rest of the renderer.
+A system for defining self-contained bind groups — each owning its GPU layout, WGSL shader declarations, and (for runtime layouts) buffer management — then composing them into a final pipeline. Each bind group is an independent module you can swap or reuse without touching the rest of the renderer.
 
-**`BindGroupLayoutProvider`** trait - Defines bind group layout and associated WGSL shader code. Uses `#BIND_GROUP` as a placeholder for the group index.
+**`BindGroupLayoutProvider`** trait - Defines a bind group layout and an associated WGSL library snippet. Uses `#BIND_GROUP` as a placeholder for the group index.
+
+**`BindGroupLayoutDef`** trait - Compile-time-known layout. Pair with `CachedBindGroupLayout<P>` (resource) and `BindGroupLayoutInitPlugin<P>` for zero-boilerplate static layouts.
 
 **`BindGroupProvider`** trait - Runtime interface providing `&BindGroup` for render passes.
 
-**`SimpleBindGroupLayoutBuilder`** - Builder for bind groups with arbitrary bindings and typed uniforms. Supports `add_entry` for manual bindings (textures, samplers, etc.) and `add_uniform<Ty>` for type-safe uniforms that auto-generate layout entries and WGSL declarations.
+**`SimpleBindGroupLayoutBuilder`** - Builder for runtime bind groups with arbitrary bindings and typed uniforms. Supports `add_entry` for manual bindings (textures, samplers, etc.) and `add_uniform::<Ty>` for type-safe uniforms that auto-generate layout entries and WGSL declarations.
 
-**`SimpleBindGroupProvider`** - Holds the `BindGroup` and uniform `Buffer`s. Update uniforms at runtime via `set_uniform(&queue, &entry, value)` with type-safe `UniformEntry<Ty>` handles.
+**`SimpleBindGroupProvider`** - Created by binding resources to a `SimpleBindGroupLayoutProvider`. Holds the `BindGroup` and uniform `Buffer`s. Update uniforms at runtime via `set_uniform(&queue, &entry, value)` with type-safe `UniformEntry<Ty>` handles.
 
-**`PipelineLayoutComposer`** - Combines multiple bind group layouts into a single `PipelineLayout` and composed shader using `naga_oil`. Caches results.
-
-**`ComposedPipelineResourceProvider`** - Bridges composition into the pipeline management system via `RenderPipelineResourceProvider`.
+**`PipelineLayoutComposer`** - Combines multiple bind group layout providers into a single `PipelineLayout` and a composed `ShaderModule`. Each provider's WGSL library is concatenated with `#BIND_GROUP` substituted for the actual group index. Additional WGSL snippets can be prepended. Results are cached. (Previously used `naga_oil` for module merging; now does plain string concatenation since commit `fd34a17`.)
 
 See `crates/modul_render/DOCS.md` for detailed usage and examples.
 
@@ -206,11 +233,11 @@ A scheduling system for render operations:
 - Automatically inserts resolve operations when reading previously-written targets
 - Lazy initialization on first run
 
-**`OperationBuilder`** trait - Declares which render targets are read/written:
+**`OperationBuilder`** trait - Declares which render targets are read/written and produces an `Operation`:
 ```rust
-fn reads(&self) -> Vec<RenderTargetSource>
-fn writes(&self) -> Vec<RenderTargetSource>
-fn build(self, world) -> Box<dyn Operation>
+fn reading(&self) -> Vec<RenderTargetSource>
+fn writing(&self) -> Vec<RenderTargetSource>
+fn finish(self, world: &World, device: &Device) -> impl Operation + 'static
 ```
 
 **`Operation`** trait - Executes actual render commands.
