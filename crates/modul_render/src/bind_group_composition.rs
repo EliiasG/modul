@@ -384,12 +384,12 @@ impl PipelineLayoutComposer {
     /// Compose and cache the pipeline layout from the added bind group providers.
     pub fn compose_pipeline_layout(&mut self, device: &Device) -> &PipelineLayout {
         self.composed.get_or_insert_with(|| {
-            let layouts: Vec<&wgpu::BindGroupLayout> =
-                self.source.iter().map(|p| p.layout()).collect();
+            let layouts: Vec<Option<&wgpu::BindGroupLayout>> =
+                self.source.iter().map(|p| Some(p.layout())).collect();
             device.create_pipeline_layout(&PipelineLayoutDescriptor {
                 label: Some("Composed pipeline layout"),
                 bind_group_layouts: &layouts,
-                push_constant_ranges: &[],
+                immediate_size: 0,
             })
         })
     }

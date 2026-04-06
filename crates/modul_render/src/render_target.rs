@@ -1,11 +1,27 @@
 use bevy_ecs::component::Component;
 use log::warn;
 use wgpu::{
-    Color, CommandEncoder, Device, Extent3d, LoadOp, Operations, PresentMode, RenderPass,
-    RenderPassColorAttachment, RenderPassDepthStencilAttachment, RenderPassDescriptor, StoreOp,
-    Surface, SurfaceCapabilities, SurfaceConfiguration, SurfaceError, SurfaceTexture, Texture,
-    TextureDescriptor, TextureFormat, TextureUsages, TextureView, TextureViewDescriptor,
+    Color, CommandEncoder, CurrentSurfaceTexture, Device, Extent3d, LoadOp, Operations,
+    PresentMode, RenderPass, RenderPassColorAttachment, RenderPassDepthStencilAttachment,
+    RenderPassDescriptor, StoreOp, Surface, SurfaceCapabilities, SurfaceConfiguration,
+    SurfaceTexture, Texture, TextureDescriptor, TextureFormat, TextureUsages, TextureView,
+    TextureViewDescriptor,
 };
+
+/// Result of [SurfaceRenderTarget::update].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SurfaceUpdateStatus {
+    /// Texture was acquired; render this frame normally.
+    Ready,
+    /// Texture was acquired but the surface is suboptimal (e.g. mid-resize).
+    /// Render this frame; the next call to `update` will reconfigure the surface.
+    ReadySuboptimal,
+    /// No texture was acquired (Outdated/Lost/Timeout/Occluded). The caller
+    /// should request another redraw and try again.
+    Skipped,
+    /// Fatal validation error from the surface. The caller should exit.
+    Failed,
+}
 // almost 1000 lines of BS
 // brace yourself
 
@@ -326,6 +342,7 @@ fn create_pass<'a>(
     }
     Some(command_encoder.begin_render_pass(&RenderPassDescriptor {
         label: None,
+        multiview_mask: None,
         color_attachments: &[target.texture_view().map(|view| {
             let multisample = target.multisampled_view();
             RenderPassColorAttachment {
@@ -333,6 +350,7 @@ fn create_pass<'a>(
                 view: multisample.unwrap_or(view),
                 // set resolve target if multisampling and should resolve
                 resolve_target: Some(view).filter(|_| multisample.is_some() && resolve),
+                depth_slice: None,
                 ops: Operations {
                     load: if clear_color {
                         LoadOp::Clear(
@@ -686,6 +704,8 @@ pub struct SurfaceRenderTarget {
     multisampled_texture: Option<(Texture, TextureView)>,
     depth_stencil_texture: Option<(Texture, TextureView)>,
 
+    /// Set when the surface returned `Suboptimal`; triggers a reconfigure on the next `update`.
+    pending_reconfigure: bool,
     resized: bool,
     resolve_scheduled: bool,
     clear_color_scheduled: bool,
@@ -704,6 +724,7 @@ impl SurfaceRenderTarget {
             color_texture: None,
             multisampled_texture: None,
             depth_stencil_texture: None,
+            pending_reconfigure: false,
             resized: false,
             resolve_scheduled: false,
             clear_color_scheduled: false,
@@ -759,17 +780,16 @@ impl SurfaceRenderTarget {
         self.surface_capabilities = Some(capabilities);
     }
 
-    /// Applies the scheduled changes, and updates [SurfaceTexture] this might replace the textures and thereby clear them
-    /// Returns whether the window should request a redraw
-    pub fn update(&mut self, device: &Device, surface: &Surface) -> Result<(), SurfaceError> {
+    /// Applies the scheduled changes, and updates [SurfaceTexture] this might replace the textures and thereby clear them.
+    /// Returns a [SurfaceUpdateStatus] indicating whether the texture was acquired and whether the caller should retry.
+    pub fn update(&mut self, device: &Device, surface: &Surface) -> SurfaceUpdateStatus {
         // yuck, maybe rewrite in the future?
         // probably not happening
         let (Some(preferred_format), Some(caps)) =
             (&self.preferred_format, &self.surface_capabilities)
         else {
             warn!("Tried to update uninitialized SurfaceRenderTarget");
-            // ok because it's a programmer error and not a surface err
-            return Ok(());
+            return SurfaceUpdateStatus::Skipped;
         };
         let (color_changed, multisampled_changed, depth_stencil_changed) = self.changes();
         if let Some(cfg) = self.scheduled_config.take() {
@@ -797,8 +817,9 @@ impl SurfaceRenderTarget {
             alpha_mode: Default::default(),
             view_formats: Vec::new(),
         };
-        if color_changed || self.resized {
-            surface.configure(&device, &surface_cfg);
+        if color_changed || self.resized || self.pending_reconfigure {
+            surface.configure(device, &surface_cfg);
+            self.pending_reconfigure = false;
             if multisampled_changed || self.resized {
                 self.multisampled_texture = cfg.color_config.multisample_config.as_ref().map(|m| {
                     let mut desc = texture_descriptor(self.size.0, self.size.1);
@@ -808,17 +829,31 @@ impl SurfaceRenderTarget {
                 });
             }
         }
-        match surface.get_current_texture() {
-            Ok(t) => {
+        let status = match surface.get_current_texture() {
+            CurrentSurfaceTexture::Success(t) => {
                 let view = t.texture.create_view(&TextureViewDescriptor::default());
                 self.color_texture = Some((t, view));
+                SurfaceUpdateStatus::Ready
             }
-            Err(e) => {
+            CurrentSurfaceTexture::Suboptimal(t) => {
+                // Render this frame, then reconfigure on the next update.
+                let view = t.texture.create_view(&TextureViewDescriptor::default());
+                self.color_texture = Some((t, view));
+                self.pending_reconfigure = true;
+                SurfaceUpdateStatus::ReadySuboptimal
+            }
+            CurrentSurfaceTexture::Outdated | CurrentSurfaceTexture::Lost => {
                 self.color_texture = None;
-                if let SurfaceError::Lost | SurfaceError::Outdated = e {
-                    surface.configure(device, &surface_cfg);
-                }
-                return Err(e);
+                surface.configure(device, &surface_cfg);
+                return SurfaceUpdateStatus::Skipped;
+            }
+            CurrentSurfaceTexture::Timeout | CurrentSurfaceTexture::Occluded => {
+                self.color_texture = None;
+                return SurfaceUpdateStatus::Skipped;
+            }
+            CurrentSurfaceTexture::Validation => {
+                self.color_texture = None;
+                return SurfaceUpdateStatus::Failed;
             }
         };
         if depth_stencil_changed || self.resized {
@@ -830,7 +865,7 @@ impl SurfaceRenderTarget {
             })
         }
         self.resized = false;
-        Ok(())
+        status
     }
 
     /// called at the end of rendering, this will drop the [SurfaceTexture]

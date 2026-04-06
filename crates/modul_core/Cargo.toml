@@ -8,7 +8,7 @@ description = "Currently just reserved, planning to create a simple game/app eng
 [dependencies]
 bevy_app = "0.18"
 bevy_ecs = "0.18"
-wgpu = "24.0"
+wgpu = "29.0"
 winit = "0.30"
 env_logger = "0.11"
 pollster = "0.4"

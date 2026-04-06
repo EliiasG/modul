@@ -15,7 +15,7 @@ modul_util = { path = "crates/modul_util" }
 
 [dev-dependencies]
 winit = "0.30"
-wgpu = "24.0"
+wgpu = "29.0"
 bevy_ecs = "0.18"
 
 [[example]]

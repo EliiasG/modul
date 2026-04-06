@@ -11,7 +11,7 @@ use modul_core::{
     AdapterRes, DeviceRes, EventBuffer, ImportantWindow, Redraw, ShouldExit, SurfaceFormat,
     UpdatingWindow, WindowComponent, WindowMap,
 };
-use wgpu::{PipelineLayout, ShaderModule, SurfaceError};
+use wgpu::{PipelineLayout, ShaderModule};
 use winit::event::{Event, WindowEvent};
 
 pub use render_target::*;
@@ -133,12 +133,14 @@ fn handle_events(
         if let WindowEvent::Resized(size) = event {
             render_target.set_size((size.width, size.height));
         } else if let WindowEvent::RedrawRequested = event {
-            if let Err(e) = render_target.update(&device.0, &win.surface) {
-                if e == SurfaceError::OutOfMemory {
-                    eprintln!("Surface out of memory, exiting...");
-                    commands.insert_resource(ShouldExit);
-                } else {
+            match render_target.update(&device.0, &win.surface) {
+                SurfaceUpdateStatus::Ready | SurfaceUpdateStatus::ReadySuboptimal => {}
+                SurfaceUpdateStatus::Skipped => {
                     win.window.request_redraw();
+                }
+                SurfaceUpdateStatus::Failed => {
+                    eprintln!("Fatal surface error, exiting...");
+                    commands.insert_resource(ShouldExit);
                 }
             }
             if important {

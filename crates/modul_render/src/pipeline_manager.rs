@@ -182,8 +182,8 @@ impl RenderPipelineManager {
                         .as_ref()
                         .map(|ds| DepthStencilState {
                             format,
-                            depth_write_enabled: ds.depth_write_enable,
-                            depth_compare: ds.depth_compare,
+                            depth_write_enabled: Some(ds.depth_write_enable),
+                            depth_compare: Some(ds.depth_compare),
                             stencil: ds.stencil.clone(),
                             bias: ds.bias,
                         })
@@ -210,7 +210,7 @@ impl RenderPipelineManager {
                 } else {
                     None
                 },
-                multiview: None,
+                multiview_mask: None,
                 cache: None,
             };
             device.create_render_pipeline(&desc)

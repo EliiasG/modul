@@ -168,9 +168,9 @@ pub struct DefaultGraphicsInitializer {
 impl GraphicsInitializer for DefaultGraphicsInitializer {
     fn initialize(self, event_loop: &ActiveEventLoop) -> GraphicsInitializerResult {
         env_logger::init();
-        let instance = Instance::new(&InstanceDescriptor {
+        let instance = Instance::new(InstanceDescriptor {
             backends: Backends::all(),
-            ..Default::default()
+            ..InstanceDescriptor::new_without_display_handle()
         });
 
         let window = event_loop
@@ -191,7 +191,7 @@ impl GraphicsInitializer for DefaultGraphicsInitializer {
         .expect("no adapter?");
 
         let (device, queue) =
-            pollster::block_on(adapter.request_device(&DeviceDescriptor::default(), None))
+            pollster::block_on(adapter.request_device(&DeviceDescriptor::default()))
                 .expect("no device?");
 
         let surface_format = surface
