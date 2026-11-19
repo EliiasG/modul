@@ -331,15 +331,15 @@ enum EntryData {
 /// Composes a pipeline layout and shader from multiple [`BindGroupLayoutProvider`]s.
 /// Bind group WGSL libraries are concatenated with `#BIND_GROUP` replaced by the group index.
 /// Additional WGSL snippets can be prepended before the main shader source.
-pub struct PipelineLayoutComposer {
-    source: Vec<Box<dyn BindGroupLayoutProvider + Send + Sync>>,
-    snippets: Vec<String>,
+pub struct PipelineLayoutComposer<'a> {
+    source: Vec<Box<&'a (dyn BindGroupLayoutProvider + Send + Sync)>>,
+    snippets: Vec<&'a str>,
     composed: Option<PipelineLayout>,
     compiled_shader: Option<ShaderModule>,
     checks: Option<ShaderRuntimeChecks>,
 }
 
-impl PipelineLayoutComposer {
+impl<'a> PipelineLayoutComposer<'a> {
     pub fn new() -> Self {
         Self {
             source: Vec::new(),
@@ -364,7 +364,7 @@ impl PipelineLayoutComposer {
     #[inline]
     pub fn add_bind_group(
         &mut self,
-        group: impl BindGroupLayoutProvider + Send + Sync + 'static,
+        group: &'a (impl BindGroupLayoutProvider + Send + Sync + 'static),
     ) -> &mut Self {
         self.source.push(Box::new(group));
         self.composed = None;
@@ -375,8 +375,8 @@ impl PipelineLayoutComposer {
     /// Add a WGSL snippet that will be included before the main shader source.
     /// Use this for shared utility functions (e.g. lighting, depth reconstruction).
     #[inline]
-    pub fn add_snippet(&mut self, source: impl Into<String>) -> &mut Self {
-        self.snippets.push(source.into());
+    pub fn add_snippet(&mut self, source: &'a str) -> &mut Self {
+        self.snippets.push(source);
         self.compiled_shader = None;
         self
     }
