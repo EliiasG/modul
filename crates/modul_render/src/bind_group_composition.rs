@@ -4,12 +4,7 @@ use modul_core::{Init, RenderContext};
 use std::borrow::Cow;
 use std::marker::PhantomData;
 use std::num::NonZero;
-use wgpu::{
-    BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor,
-    BindGroupLayoutEntry, BindingResource, BindingType, Buffer, BufferDescriptor, BufferUsages,
-    Device, PipelineLayout, PipelineLayoutDescriptor, Queue, ShaderModule, ShaderModuleDescriptor,
-    ShaderRuntimeChecks, ShaderSource, ShaderStages,
-};
+use wgpu::{BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingResource, BindingType, Buffer, BufferDescriptor, BufferUsages, Device, PipelineLayout, PipelineLayoutDescriptor, Queue, RenderPipeline, ShaderModule, ShaderModuleDescriptor, ShaderRuntimeChecks, ShaderSource, ShaderStages};
 
 /// Provides a created bind group layout and its WGSL library source.
 /// Use `#BIND_GROUP` as the bind group index placeholder in the library.
@@ -334,8 +329,6 @@ enum EntryData {
 pub struct PipelineLayoutComposer<'a> {
     source: Vec<Box<&'a (dyn BindGroupLayoutProvider + Send + Sync)>>,
     snippets: Vec<&'a str>,
-    composed: Option<PipelineLayout>,
-    compiled_shader: Option<ShaderModule>,
     checks: Option<ShaderRuntimeChecks>,
 }
 
@@ -344,8 +337,6 @@ impl<'a> PipelineLayoutComposer<'a> {
         Self {
             source: Vec::new(),
             snippets: Vec::new(),
-            composed: None,
-            compiled_shader: None,
             checks: None,
         }
     }
@@ -367,8 +358,6 @@ impl<'a> PipelineLayoutComposer<'a> {
         group: &'a (impl BindGroupLayoutProvider + Send + Sync + 'static),
     ) -> &mut Self {
         self.source.push(Box::new(group));
-        self.composed = None;
-        self.compiled_shader = None;
         self
     }
 
@@ -377,40 +366,31 @@ impl<'a> PipelineLayoutComposer<'a> {
     #[inline]
     pub fn add_snippet(&mut self, source: &'a str) -> &mut Self {
         self.snippets.push(source);
-        self.compiled_shader = None;
         self
     }
 
+    pub fn compose(&mut self, device: &Device, shader_source: &str, shader_label: &str) -> (PipelineLayout, ShaderModule){
+        (self.compose_pipeline_layout(device), self.compose_shader(device, shader_label, shader_source))
+    }
+
     /// Compose and cache the pipeline layout from the added bind group providers.
-    pub fn compose_pipeline_layout(&mut self, device: &Device) -> &PipelineLayout {
-        self.composed.get_or_insert_with(|| {
-            let layouts: Vec<Option<&wgpu::BindGroupLayout>> =
-                self.source.iter().map(|p| Some(p.layout())).collect();
-            device.create_pipeline_layout(&PipelineLayoutDescriptor {
-                label: Some("Composed pipeline layout"),
-                bind_group_layouts: &layouts,
-                immediate_size: 0,
-            })
+    fn compose_pipeline_layout(&self, device: &Device) -> PipelineLayout {
+        let layouts: Vec<Option<&wgpu::BindGroupLayout>> =
+            self.source.iter().map(|p| Some(p.layout())).collect();
+        device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("Composed pipeline layout"),
+            bind_group_layouts: &layouts,
+            immediate_size: 0,
         })
     }
 
-    /// Gets the currently cached pipeline layout.
-    #[inline]
-    pub fn get_pipeline_layout(&self) -> Option<&PipelineLayout> {
-        self.composed.as_ref()
-    }
-
     /// Compose and cache a shader module from bind group libraries, snippets, and the main source.
-    pub fn compose_shader(
-        &mut self,
+    fn compose_shader(
+        &self,
         device: &Device,
         label: &str,
         main_source: &str,
-    ) -> &ShaderModule {
-        if self.compiled_shader.is_some() {
-            return self.compiled_shader.as_ref().unwrap();
-        }
-
+    ) -> ShaderModule {
         let mut full_source = String::new();
 
         // Bind group declarations
@@ -434,17 +414,9 @@ impl<'a> PipelineLayoutComposer<'a> {
             source: ShaderSource::Wgsl(Cow::Owned(full_source)),
         };
 
-        self.compiled_shader = Some(match self.checks {
+        match self.checks {
             None => device.create_shader_module(desc),
             Some(checks) => unsafe { device.create_shader_module_trusted(desc, checks) },
-        });
-
-        self.compiled_shader.as_ref().unwrap()
-    }
-
-    /// Gets the currently cached shader module.
-    #[inline]
-    pub fn get_shader_module(&self) -> Option<&ShaderModule> {
-        self.compiled_shader.as_ref()
+        }
     }
 }
